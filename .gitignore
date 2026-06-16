@@ -1,0 +1,12 @@
+.env
+.env.*
+*.env
+*.env.*
+.envrc
+.middleware-state/
+.middleware-state-*/
+bin/
+/middleware-codex-oauth
+/middleware-codex-oauth-mcp
+*.test
+*.out
