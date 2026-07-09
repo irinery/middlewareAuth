@@ -55,6 +55,30 @@ func TestExchangeAuthorizationCodeRejectsMissingCode(t *testing.T) {
 	}
 }
 
+func TestExchangeAuthorizationCodeDoesNotFollowRedirect(t *testing.T) {
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	_, err := ExchangeAuthorizationCode(context.Background(), source.Client(), config.OAuthConfig{
+		ClientID:    config.DefaultClientID,
+		AuthBaseURL: source.URL,
+		TokenPath:   "/oauth/token",
+	}, "authorization-code", "verifier", "http://localhost:18787/v1/auth/openai/callback")
+	if err == nil {
+		t.Fatal("esperava erro para redirect OAuth")
+	}
+	if targetCalled {
+		t.Fatal("troca OAuth seguiu redirect")
+	}
+}
+
 func TestRequestDeviceCodeParsesResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"device_authorization_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval":1,"expires_in":900}`))

@@ -27,6 +27,8 @@ export MIDDLEWARE_LLM_MODEL='gpt-5.5'
 
 Nao use `.env` para essas variaveis. Passe pelo gerenciador do cliente MCP ou pelo ambiente do processo.
 
+O MCP so aceita `MIDDLEWARE_BASE_URL` em loopback (`localhost`, `127.0.0.1` ou `::1`) e exige `MIDDLEWARE_CLIENT_TOKEN` com 32 ou mais caracteres. Se alguma dessas condicoes falhar, o processo encerra no startup com erro de configuracao em stderr.
+
 Ferramentas expostas:
 
 ```text

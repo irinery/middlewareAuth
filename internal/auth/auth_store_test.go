@@ -17,7 +17,7 @@ func testStore(t *testing.T) *FileStore {
 	cfg, err := config.LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +94,21 @@ func TestFileStoreCorruptedStoreFailsClosed(t *testing.T) {
 	raw, _ := os.ReadFile(store.path)
 	if string(raw) != "{broken" {
 		t.Fatalf("corrupted store was modified")
+	}
+}
+
+func TestFileStoreRejectsSymbolicLink(t *testing.T) {
+	store := testStore(t)
+	target := store.path + ".target"
+	if err := os.WriteFile(target, []byte(`{"version":1,"profiles":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, store.path); err != nil {
+		t.Skipf("symlink indisponivel: %v", err)
+	}
+	_, err := store.LoadAuthProfile(context.Background(), "projectA", "default")
+	if security.Code(err) != "ERR_AUTH_STORE_CORRUPTED" {
+		t.Fatalf("error code = %s, want ERR_AUTH_STORE_CORRUPTED (%v)", security.Code(err), err)
 	}
 }
 

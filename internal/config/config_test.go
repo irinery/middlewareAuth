@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/irinery/middlewareAuth/internal/security"
@@ -14,7 +15,7 @@ func testEnv(t *testing.T) map[string]string {
 	return map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
 	}
 }
 
@@ -85,6 +86,20 @@ func TestLoadConfigCreatesStateDir(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsSymbolicLinkStateDir(t *testing.T) {
+	target := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "state-link")
+	if err := os.Symlink(target, stateDir); err != nil {
+		t.Skipf("symlink indisponivel: %v", err)
+	}
+	env := testEnv(t)
+	env["MIDDLEWARE_STATE_DIR"] = stateDir
+	_, err := LoadConfig(context.Background(), env)
+	if security.Code(err) != "ERR_STATE_DIR_UNAVAILABLE" {
+		t.Fatalf("error code = %s, want ERR_STATE_DIR_UNAVAILABLE (%v)", security.Code(err), err)
+	}
+}
+
 func TestLoadConfigRequiresSecretInProduction(t *testing.T) {
 	env := testEnv(t)
 	delete(env, "MIDDLEWARE_SECRET_KEY")
@@ -101,6 +116,42 @@ func TestLoadConfigRequiresClientToken(t *testing.T) {
 	_, err := LoadConfig(context.Background(), env)
 	if security.Code(err) != "ERR_CLIENT_TOKEN_REQUIRED" {
 		t.Fatalf("error code = %s, want ERR_CLIENT_TOKEN_REQUIRED (%v)", security.Code(err), err)
+	}
+}
+
+func TestLoadConfigRejectsShortClientToken(t *testing.T) {
+	env := testEnv(t)
+	env["MIDDLEWARE_CLIENT_TOKEN"] = "short-token"
+	_, err := LoadConfig(context.Background(), env)
+	if security.Code(err) != "ERR_CLIENT_TOKEN_REQUIRED" {
+		t.Fatalf("error code = %s, want ERR_CLIENT_TOKEN_REQUIRED (%v)", security.Code(err), err)
+	}
+}
+
+func TestLoadConfigRejectsSeparateCallbackPort(t *testing.T) {
+	env := testEnv(t)
+	env["OAUTH_CALLBACK_PORT"] = "18788"
+	_, err := LoadConfig(context.Background(), env)
+	if security.Code(err) != "ERR_OAUTH_CALLBACK_MISMATCH" {
+		t.Fatalf("error code = %s, want ERR_OAUTH_CALLBACK_MISMATCH (%v)", security.Code(err), err)
+	}
+}
+
+func TestLoadConfigRejectsUnsafeRuntimeLimits(t *testing.T) {
+	env := testEnv(t)
+	env["HTTP_READ_TIMEOUT_MS"] = "0"
+	_, err := LoadConfig(context.Background(), env)
+	if security.Code(err) != "ERR_HTTP_CONFIG_INVALID" {
+		t.Fatalf("error code = %s, want ERR_HTTP_CONFIG_INVALID (%v)", security.Code(err), err)
+	}
+}
+
+func TestLoadConfigRequiresLogRedaction(t *testing.T) {
+	env := testEnv(t)
+	env["MIDDLEWARE_REDACT_LOGS"] = "false"
+	_, err := LoadConfig(context.Background(), env)
+	if security.Code(err) != "ERR_LOG_REDACTION_REQUIRED" {
+		t.Fatalf("error code = %s, want ERR_LOG_REDACTION_REQUIRED (%v)", security.Code(err), err)
 	}
 }
 
@@ -143,7 +194,7 @@ func TestLoadConfigAllowsExplicitNonLoopbackBind(t *testing.T) {
 func TestLoadConfigRequiresSecretInDevelopment(t *testing.T) {
 	_, err := LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
-		"MIDDLEWARE_CLIENT_TOKEN": "internal-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "internal-token-with-32-characters",
 	})
 	if security.Code(err) != "ERR_SECRET_KEY_REQUIRED" {
 		t.Fatalf("error code = %s, want ERR_SECRET_KEY_REQUIRED (%v)", security.Code(err), err)
@@ -151,14 +202,21 @@ func TestLoadConfigRequiresSecretInDevelopment(t *testing.T) {
 }
 
 func TestLoadConfigRejectsDotEnvFile(t *testing.T) {
-	t.Chdir(t.TempDir())
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
 	if err := os.WriteFile(".env", []byte("MIDDLEWARE_CLIENT_TOKEN=secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := LoadConfig(context.Background(), map[string]string{
+	_, err = LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
 	})
 	if security.Code(err) != "ERR_ENV_FILE_FORBIDDEN" {
 		t.Fatalf("error code = %s, want ERR_ENV_FILE_FORBIDDEN (%v)", security.Code(err), err)

@@ -106,9 +106,7 @@ func ExchangeAuthorizationCode(ctx context.Context, client *http.Client, cfg con
 	if len(code) > 2000 {
 		return nil, security.NewError("ERR_OAUTH_MISSING_CODE", "authorization code grande demais", http.StatusBadRequest)
 	}
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client = noRedirectClient(client)
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("client_id", cfg.ClientID)
@@ -146,6 +144,21 @@ func ExchangeAuthorizationCode(ctx context.Context, client *http.Client, cfg con
 		AccountID: parsed.AccountID,
 		Email:     parsed.Email,
 	}, nil
+}
+
+func noRedirectClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = config.NewHTTPClient(config.CodexConfig{
+			RequestTimeoutMs:    30000,
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 10,
+		})
+	}
+	copy := *client
+	copy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &copy
 }
 
 func LoginWithOAuthPKCE(ctx context.Context, cfg config.Config, callbacks OAuthLoginCallbacks) (*OAuthCredentials, error) {

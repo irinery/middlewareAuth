@@ -57,7 +57,7 @@ func testRefresher(t *testing.T, tokenServer *httptest.Server) (*Refresher, *Fil
 	cfg, err := config.LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
 	})
 	if err != nil {
 		t.Fatal(err)

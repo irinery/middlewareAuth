@@ -115,6 +115,10 @@ func (h *Handler) startDeviceCodeLogin(w http.ResponseWriter, r *http.Request, p
 		defer cancel()
 		credentials, err := oauth.PollDeviceCode(ctx, h.client, h.cfg.OAuth, *device)
 		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded || security.Code(err) == "ERR_DEVICE_CODE_TIMEOUT" {
+				h.markSessionExpired(sessionID)
+				return
+			}
 			h.markSessionFailed(sessionID, err)
 			return
 		}
@@ -138,11 +142,6 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, security.NewError("ERR_OAUTH_STATE_MISMATCH", "state OAuth invalido", http.StatusBadRequest))
 		return
 	}
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		writeError(w, security.NewError("ERR_OAUTH_MISSING_CODE", "authorization code ausente", http.StatusBadRequest))
-		return
-	}
 	session, ok := h.sessionByState(state)
 	if !ok {
 		writeError(w, security.NewError("ERR_OAUTH_STATE_MISMATCH", "state OAuth nao encontrado", http.StatusBadRequest))
@@ -152,6 +151,21 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		h.markSessionExpired(session.LoginSessionID)
 		h.removeStateIndex(state)
 		writeError(w, security.NewError("ERR_LOGIN_SESSION_EXPIRED", "sessao de login expirada", http.StatusGone))
+		return
+	}
+	if r.URL.Query().Get("error") != "" {
+		err := security.NewError("ERR_OAUTH_DENIED", "autorizacao OAuth recusada", http.StatusBadRequest)
+		h.markSessionFailed(session.LoginSessionID, err)
+		h.removeStateIndex(state)
+		writeError(w, err)
+		return
+	}
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		err := security.NewError("ERR_OAUTH_MISSING_CODE", "authorization code ausente", http.StatusBadRequest)
+		h.markSessionFailed(session.LoginSessionID, err)
+		h.removeStateIndex(state)
+		writeError(w, err)
 		return
 	}
 	credentials, err := oauth.ExchangeAuthorizationCode(r.Context(), h.client, h.cfg.OAuth, code, session.Flow.Verifier, session.Flow.RedirectURI)

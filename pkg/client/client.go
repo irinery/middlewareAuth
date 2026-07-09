@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -23,21 +24,23 @@ type Client struct {
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
-	if strings.TrimSpace(options.BaseURL) == "" {
+	baseURL := strings.TrimSpace(options.BaseURL)
+	if baseURL == "" {
 		return nil, &ClientError{Code: "ERR_CLIENT_BASE_URL_INVALID", Message: "BaseURL obrigatoria"}
 	}
-	parsed, err := url.Parse(options.BaseURL)
+	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, &ClientError{Code: "ERR_CLIENT_BASE_URL_INVALID", Message: "BaseURL invalida"}
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, &ClientError{Code: "ERR_CLIENT_BASE_URL_INVALID", Message: "BaseURL precisa ser http ou https"}
 	}
-	if strings.TrimSpace(options.MiddlewareToken) == "" {
-		return nil, &ClientError{Code: "ERR_CLIENT_AUTH_TOKEN_MISSING", Message: "MiddlewareToken obrigatorio"}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, &ClientError{Code: "ERR_CLIENT_BASE_URL_INVALID", Message: "BaseURL nao pode conter userinfo, query ou fragmento"}
 	}
-	if len(options.MiddlewareToken) > 2048 {
-		return nil, &ClientError{Code: "ERR_CLIENT_AUTH_TOKEN_MISSING", Message: "MiddlewareToken grande demais"}
+	middlewareToken := strings.TrimSpace(options.MiddlewareToken)
+	if len(middlewareToken) < 32 || len(middlewareToken) > 2048 {
+		return nil, &ClientError{Code: "ERR_CLIENT_AUTH_TOKEN_MISSING", Message: "MiddlewareToken precisa ter entre 32 e 2048 caracteres"}
 	}
 	timeoutMs := options.TimeoutMs
 	if timeoutMs == 0 {
@@ -53,10 +56,14 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}
 	}
+	clientCopy := *httpClient
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	c := &Client{
-		baseURL:         strings.TrimRight(options.BaseURL, "/"),
-		middlewareToken: options.MiddlewareToken,
-		httpClient:      httpClient,
+		baseURL:         strings.TrimRight(parsed.String(), "/"),
+		middlewareToken: middlewareToken,
+		httpClient:      &clientCopy,
 		timeout:         time.Duration(timeoutMs) * time.Millisecond,
 	}
 	c.Auth = &AuthService{client: c, defaultProjectID: options.ProjectID}
@@ -65,6 +72,9 @@ func NewClient(options ClientOptions) (*Client, error) {
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, path string, body any, out any) error {
+	if ctx == nil {
+		return &ClientError{Code: "ERR_CONTEXT_CANCELLED", Message: "contexto obrigatorio"}
+	}
 	var raw []byte
 	var err error
 	if body != nil {
@@ -73,8 +83,12 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 			return &ClientError{Code: "ERR_CLIENT_HTTP_FAILED", Message: "falha ao serializar payload"}
 		}
 	}
+	maxRetries := 0
+	if retryableMethod(method) {
+		maxRetries = 2
+	}
 	var lastErr error
-	for attempt := 0; attempt <= 2; attempt++ {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 		req, err := http.NewRequestWithContext(reqCtx, method, c.url(path), bytes.NewReader(raw))
 		if err != nil {
@@ -104,7 +118,7 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 				}
 			}
 		}
-		if attempt < 2 {
+		if attempt < maxRetries {
 			timer := time.NewTimer(time.Duration(500*(1<<attempt)) * time.Millisecond)
 			select {
 			case <-ctx.Done():
@@ -117,15 +131,27 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 	return lastErr
 }
 
+func retryableMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Client) url(path string) string {
 	return c.baseURL + "/" + strings.TrimLeft(path, "/")
 }
 
 func decodeResponse(resp *http.Response, out any) error {
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	if err != nil {
+		return &ClientError{Code: "ERR_CLIENT_HTTP_FAILED", Message: "falha ao ler resposta do middleware", Status: resp.StatusCode}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		ce := &ClientError{Code: "ERR_CLIENT_HTTP_FAILED", Message: string(raw), Status: resp.StatusCode}
+		ce := &ClientError{Code: "ERR_CLIENT_HTTP_FAILED", Message: fmt.Sprintf("middleware respondeu HTTP %d", resp.StatusCode), Status: resp.StatusCode}
 		var wrapped struct {
 			Error ClientError `json:"error"`
 		}

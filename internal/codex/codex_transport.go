@@ -21,11 +21,17 @@ type Transport struct {
 	client *http.Client
 }
 
+const maxResponseBytes = 5 << 20
+
 func NewTransport(cfg config.CodexConfig, client *http.Client) *Transport {
 	if client == nil {
 		client = config.NewHTTPClient(cfg)
 	}
-	return &Transport{cfg: cfg, client: client}
+	copy := *client
+	copy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &Transport{cfg: cfg, client: &copy}
 }
 
 func SendCodexResponse(ctx context.Context, credential auth.StoredOAuthCredential, request CodexResponseRequest, options CodexTransportOptions) (*CodexResponseStream, error) {
@@ -35,7 +41,7 @@ func SendCodexResponse(ctx context.Context, credential auth.StoredOAuthCredentia
 		RequestTimeoutMs: 30000,
 		MaxRetries:       3,
 	}
-	return NewTransport(cfg, http.DefaultClient).SendCodexResponse(ctx, credential, request, options)
+	return NewTransport(cfg, config.NewHTTPClient(cfg)).SendCodexResponse(ctx, credential, request, options)
 }
 
 func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.StoredOAuthCredential, request CodexResponseRequest, options CodexTransportOptions) (*CodexResponseStream, error) {
@@ -194,19 +200,12 @@ func validateRequest(request CodexResponseRequest) error {
 }
 
 func parseResponse(resp *http.Response) (*CodexResponseStream, bool, time.Duration, error) {
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "text/event-stream") {
-		events, err := ParseSSE(resp.Body, 1<<20)
-		if err != nil {
-			return nil, false, 0, err
-		}
-		return &CodexResponseStream{Events: events, OutputText: collectOutputText(events)}, false, 0, nil
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	raw, err := readLimitedResponse(resp.Body, maxResponseBytes)
 	if err != nil {
-		return nil, false, 0, security.Wrap("ERR_CODEX_STREAM_INVALID", "falha ao ler resposta Codex", http.StatusBadGateway, err)
+		return nil, false, 0, err
 	}
-	if looksLikeSSE(raw) {
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "text/event-stream") || looksLikeSSE(raw) {
 		events, err := ParseSSE(bytes.NewReader(raw), 1<<20)
 		if err != nil {
 			return nil, false, 0, err
@@ -230,6 +229,17 @@ func parseResponse(resp *http.Response) (*CodexResponseStream, bool, time.Durati
 		Usage:      parsed.Usage,
 		OutputText: outputTextFromJSON(raw),
 	}, false, 0, nil
+}
+
+func readLimitedResponse(reader io.Reader, limit int64) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, security.Wrap("ERR_CODEX_STREAM_INVALID", "falha ao ler resposta Codex", http.StatusBadGateway, err)
+	}
+	if int64(len(raw)) > limit {
+		return nil, security.NewError("ERR_CODEX_STREAM_INVALID", "resposta Codex excede limite", http.StatusBadGateway)
+	}
+	return raw, nil
 }
 
 func looksLikeSSE(raw []byte) bool {

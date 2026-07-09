@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,12 +63,16 @@ func New(options Options) *Server {
 	if options.HTTPClient == nil {
 		options.HTTPClient = &http.Client{Timeout: 60 * time.Second}
 	}
+	clientCopy := *options.HTTPClient
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	if options.Logger == nil {
 		options.Logger = log.New(io.Discard, "", 0)
 	}
 	return &Server{
 		baseURL:             options.BaseURL,
-		middlewareToken:     options.MiddlewareToken,
+		middlewareToken:     strings.TrimSpace(options.MiddlewareToken),
 		defaultProjectID:    options.DefaultProjectID,
 		defaultProviderID:   normalizeProviderID(options.DefaultProviderID),
 		defaultLLMProfileID: options.DefaultLLMProfileID,
@@ -78,7 +83,7 @@ func New(options Options) *Server {
 		lmStudioAPIKey:      options.LMStudioAPIKey,
 		lmStudioProfileID:   options.LMStudioProfileID,
 		lmStudioModel:       options.LMStudioModel,
-		client:              options.HTTPClient,
+		client:              &clientCopy,
 		logger:              options.Logger,
 	}
 }
@@ -102,6 +107,9 @@ func NewFromEnv(stderr io.Writer) *Server {
 }
 
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+	if err := s.validateConfig(true); err != nil {
+		return err
+	}
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 	writer := bufio.NewWriter(out)
@@ -584,8 +592,8 @@ func (s *Server) lmStudioResponses(ctx context.Context, args map[string]any) (st
 }
 
 func (s *Server) doJSON(ctx context.Context, method, path string, body any, out any, authRequired bool) error {
-	if authRequired && s.middlewareToken == "" {
-		return fmt.Errorf("MIDDLEWARE_CLIENT_TOKEN ausente no ambiente do MCP")
+	if err := s.validateConfig(authRequired); err != nil {
+		return err
 	}
 	var raw []byte
 	if body != nil {
@@ -611,7 +619,10 @@ func (s *Server) doJSON(ctx context.Context, method, path string, body any, out 
 		return err
 	}
 	defer resp.Body.Close()
-	rawResp, _ := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	rawResp, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	if err != nil {
+		return fmt.Errorf("falha ao ler resposta do middleware")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("middleware HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(rawResp)))
 	}
@@ -619,6 +630,28 @@ func (s *Server) doJSON(ctx context.Context, method, path string, body any, out 
 		return nil
 	}
 	return json.Unmarshal(rawResp, out)
+}
+
+func (s *Server) validateConfig(requireToken bool) error {
+	parsed, err := url.Parse(s.baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+		return fmt.Errorf("MIDDLEWARE_BASE_URL invalida")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("MIDDLEWARE_BASE_URL precisa usar http ou https")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("MIDDLEWARE_BASE_URL nao pode conter userinfo, query ou fragmento")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("MIDDLEWARE_BASE_URL precisa apontar para um middleware local")
+	}
+	if requireToken && len(s.middlewareToken) < 32 {
+		return fmt.Errorf("MIDDLEWARE_CLIENT_TOKEN precisa ter 32+ caracteres no ambiente do MCP")
+	}
+	return nil
 }
 
 func (s *Server) projectID(args map[string]any) (string, bool) {

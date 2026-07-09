@@ -10,8 +10,10 @@ import (
 	"testing"
 )
 
+const mcpTestToken = "mcp-test-token-with-32-characters"
+
 func TestServeInitializeAndToolsList(t *testing.T) {
-	server := New(Options{})
+	server := New(Options{MiddlewareToken: mcpTestToken})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
@@ -50,7 +52,7 @@ func TestToolCallHealthUsesMiddleware(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"middleware_health","arguments":{}}}
 `)
 	var output bytes.Buffer
@@ -71,19 +73,33 @@ func TestToolCallHealthUsesMiddleware(t *testing.T) {
 	}
 }
 
+func TestServeRejectsUnsafeMCPConfiguration(t *testing.T) {
+	for _, options := range []Options{
+		{BaseURL: "https://example.com", MiddlewareToken: mcpTestToken},
+		{BaseURL: "http://localhost:18787", MiddlewareToken: "short"},
+	} {
+		server := New(options)
+		var output bytes.Buffer
+		err := server.Serve(context.Background(), strings.NewReader(""), &output)
+		if err == nil {
+			t.Fatalf("Serve(%#v) aceitou configuracao invalida", options)
+		}
+	}
+}
+
 func TestToolCallOpenAILoginStatus(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/projects/acme/auth/openai/login-sessions/session-1" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "Bearer token" {
+		if r.Header.Get("Authorization") != "Bearer "+mcpTestToken {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
 		_, _ = w.Write([]byte(`{"loginSessionId":"session-1","projectId":"acme","profileId":"default","mode":"device_code","status":"completed","expiresAt":123}`))
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"openai_login_status","arguments":{"projectId":"acme","loginSessionId":"session-1"}}}
 `)
 	var output bytes.Buffer
@@ -130,7 +146,7 @@ func TestToolCallCodexResponsesPassesModelControls(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"codex_responses","arguments":{"projectId":"acme","input":"oi","model":"gpt-5.5","intelligence":"Thinking","reasoningEffort":"Estendido","extra":{"futureSelector":"next","model":"ignored"}}}}
 `)
 	var output bytes.Buffer
@@ -192,7 +208,7 @@ func TestLLMStatusMapsOpenAIResponse(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	text, isErr := server.callTool(context.Background(), "llm_status", map[string]any{
 		"providerId": "openai",
 		"projectId":  "acme",
@@ -226,7 +242,7 @@ func TestLLMLoginStartUsesDeviceCodeDefaultAndSeconds(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	text, isErr := server.callTool(context.Background(), "llm_login_start", map[string]any{
 		"providerId": "openai",
 		"projectId":  "acme",
@@ -253,7 +269,7 @@ func TestLLMLoginStatusMapsCompletedToAuthenticated(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	text, isErr := server.callTool(context.Background(), "llm_login_status", map[string]any{
 		"providerId":     "openai",
 		"projectId":      "acme",
@@ -297,7 +313,7 @@ func TestLLMResponsesMapsToOpenAICodex(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client()})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	text, isErr := server.callTool(context.Background(), "llm_responses", map[string]any{
 		"providerId":      "openai",
 		"projectId":       "acme",
@@ -323,7 +339,7 @@ func TestLLMResponsesMapsToOpenAICodex(t *testing.T) {
 func TestLLMStudioLoginStatusAndResponses(t *testing.T) {
 	apiKey := "local-api-key"
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer token" {
+		if r.Header.Get("Authorization") != "Bearer "+mcpTestToken {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
 		switch r.URL.Path {
@@ -356,7 +372,7 @@ func TestLLMStudioLoginStatusAndResponses(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: "token", HTTPClient: httpServer.Client(), LMStudioModel: "model-a"})
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client(), LMStudioModel: "model-a"})
 	text, isErr := server.callTool(context.Background(), "llm_login_start", map[string]any{
 		"providerId": "lmstudio",
 		"projectId":  "acme",

@@ -30,7 +30,11 @@ func NewRefresher(cfg config.Config, store ProfileStore, client *http.Client) *R
 	if client == nil {
 		client = config.NewHTTPClient(cfg.Codex)
 	}
-	return &Refresher{cfg: cfg, store: store, client: client, locks: newLockSet()}
+	copy := *client
+	copy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &Refresher{cfg: cfg, store: store, client: &copy, locks: newLockSet()}
 }
 
 func (r *Refresher) ResolveFreshCredential(ctx context.Context, projectID string, profileID string, minTTLms int64) (*StoredOAuthCredential, error) {

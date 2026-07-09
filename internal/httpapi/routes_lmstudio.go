@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/irinery/middlewareAuth/internal/auth"
@@ -52,12 +53,12 @@ func (h *Handler) handleLMStudioAPIKey(w http.ResponseWriter, r *http.Request, p
 		writeError(w, err)
 		return
 	}
-	apiKey := input.APIKey
+	apiKey := strings.TrimSpace(input.APIKey)
 	if apiKey == "" || len(apiKey) > 4096 {
 		writeError(w, security.NewError("ERR_LMSTUDIO_API_KEY_REQUIRED", "apiKey LM Studio obrigatoria", http.StatusBadRequest))
 		return
 	}
-	models, err := lmstudio.NewTransport(h.client).ListModels(r.Context(), baseURL, apiKey)
+	models, err := lmstudio.NewTransport(nil).ListModels(r.Context(), baseURL, apiKey)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -118,7 +119,7 @@ func (h *Handler) handleLMStudioResponses(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	response, err := lmstudio.NewTransport(h.client).SendResponse(r.Context(), credential.BaseURL, credential.Access, request)
+	response, err := lmstudio.NewTransport(nil).SendResponse(r.Context(), credential.BaseURL, credential.Access, request)
 	if err != nil {
 		writeError(w, err)
 		return

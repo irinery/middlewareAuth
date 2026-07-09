@@ -20,6 +20,8 @@ import (
 
 type fakeRefresher struct{}
 
+const handlerTestToken = "test-middleware-token-32-characters"
+
 func (fakeRefresher) ResolveFreshCredential(ctx context.Context, projectID string, profileID string, minTTLms int64) (*auth.StoredOAuthCredential, error) {
 	return &auth.StoredOAuthCredential{Access: "access", AccountID: "account-1", Expires: time.Now().Add(time.Hour).UnixMilli()}, nil
 }
@@ -35,7 +37,7 @@ func testHandler(t *testing.T) *Handler {
 	cfg, err := config.LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-token",
+		"MIDDLEWARE_CLIENT_TOKEN": handlerTestToken,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +50,7 @@ func TestLoginReturnsAuthURLWithoutSecrets(t *testing.T) {
 	handler := testHandler(t)
 	body := bytes.NewBufferString(`{"profileId":"default","mode":"oauth"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/acme/auth/openai/login", body)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -86,7 +88,7 @@ func TestLMStudioAPIKeyAndResponses(t *testing.T) {
 	handler := testHandler(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/acme/auth/lmstudio/api-key", bytes.NewBufferString(`{"profileId":"default","baseUrl":"`+lmServer.URL+`","apiKey":"`+apiKey+`"}`))
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
@@ -97,7 +99,7 @@ func TestLMStudioAPIKeyAndResponses(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/v1/projects/acme/lmstudio/responses?profileId=default", bytes.NewBufferString(`{"model":"model-a","input":[{"role":"user","content":"oi"}]}`))
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
@@ -124,6 +126,22 @@ func TestProtectedRouteRequiresMiddlewareAuth(t *testing.T) {
 	}
 }
 
+func TestJSONResponsesSetNoStoreSecurityHeaders(t *testing.T) {
+	handler := testHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q", rec.Header().Get("Cache-Control"))
+	}
+	if rec.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q", rec.Header().Get("Referrer-Policy"))
+	}
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", rec.Header().Get("X-Content-Type-Options"))
+	}
+}
+
 func TestExpiredCallbackSessionReturnsGone(t *testing.T) {
 	handler := testHandler(t)
 	flow := oauth.AuthorizationFlow{State: "expired-state", Verifier: "verifier", RedirectURI: "http://localhost/callback"}
@@ -145,6 +163,41 @@ func TestExpiredCallbackSessionReturnsGone(t *testing.T) {
 	}
 	if security.Code(security.Public(mustDecodeError(t, rec).Error)) != "ERR_LOGIN_SESSION_EXPIRED" {
 		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestCallbackDenialMarksSessionFailedWithoutLeakingProviderDetail(t *testing.T) {
+	handler := testHandler(t)
+	flow := oauth.AuthorizationFlow{State: "denied-state", Verifier: "verifier", RedirectURI: "http://localhost/callback"}
+	if err := handler.addSession(loginSession{
+		LoginSessionID: "session-denied",
+		ProjectID:      "acme",
+		ProfileID:      "default",
+		Mode:           "oauth",
+		Status:         "pending",
+		Flow:           flow,
+		ExpiresAt:      time.Now().Add(time.Minute).UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/openai/callback?state=denied-state&error=access_denied&error_description=refresh-token-secret", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "refresh-token-secret") {
+		t.Fatalf("callback leaked provider detail: %s", rec.Body.String())
+	}
+	response, err := handler.loginSessionResponse("acme", "session-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "failed" || response.Error == nil || response.Error.Code != "ERR_OAUTH_DENIED" {
+		t.Fatalf("session = %#v", response)
+	}
+	if _, exists := handler.stateIndex[flow.State]; exists {
+		t.Fatalf("OAuth state index was retained after denial")
 	}
 }
 
@@ -206,7 +259,7 @@ func TestLoginSessionStatusMarksExpired(t *testing.T) {
 		ExpiresAt:      time.Now().Add(-time.Second).UnixMilli(),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/v1/projects/acme/auth/openai/login-sessions/expired", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -278,10 +331,33 @@ func TestDeviceCodeSuccessMarksSessionCompleted(t *testing.T) {
 	}
 }
 
+func TestDeviceCodeTimeoutMarksSessionExpired(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			_, _ = w.Write([]byte(`{"device_authorization_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
+		case "/api/accounts/deviceauth/token":
+			http.Error(w, "pending", http.StatusForbidden)
+		default:
+			t.Fatalf("unexpected path = %s", r.URL.Path)
+		}
+	}))
+	defer authServer.Close()
+
+	handler := testHandler(t)
+	handler.cfg.OAuth.AuthBaseURL = authServer.URL
+	handler.client = authServer.Client()
+	sessionID := startDeviceCodeForTest(t, handler)
+	response := waitSessionStatus(t, handler, "acme", sessionID, "expired")
+	if response.Error == nil || response.Error.Code != "ERR_LOGIN_SESSION_EXPIRED" {
+		t.Fatalf("session error = %#v", response.Error)
+	}
+}
+
 func TestInvalidProjectIDReturnsBadRequest(t *testing.T) {
 	handler := testHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/projects/../secret/auth/openai/status", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -301,7 +377,7 @@ func mustDecodeError(t *testing.T, rec *httptest.ResponseRecorder) MiddlewareErr
 func startDeviceCodeForTest(t *testing.T, handler *Handler) string {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/acme/auth/openai/login", bytes.NewBufferString(`{"profileId":"default","mode":"device_code"}`))
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -316,7 +392,7 @@ func startDeviceCodeForTest(t *testing.T, handler *Handler) string {
 
 func waitSessionStatus(t *testing.T, handler *Handler, projectID, sessionID, want string) *LoginSessionResponse {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		response, err := handler.loginSessionResponse(projectID, sessionID)
 		if err != nil {

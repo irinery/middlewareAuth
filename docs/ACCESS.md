@@ -16,6 +16,8 @@ export HTTP_PORT=18787
 Nao crie `.env`: o repo bloqueia `.env*` e o check de seguranca falha se encontrar. Use path absoluto em `MIDDLEWARE_STATE_DIR` durante dev. Se usar `.middleware-state`, o store fica relativo ao `cwd` do processo.
 Para expor fora do localhost, configure `HTTP_BIND_ADDR` e `MIDDLEWARE_ALLOW_NON_LOOPBACK_BIND=true` explicitamente.
 
+`MIDDLEWARE_SECRET_KEY` e `MIDDLEWARE_CLIENT_TOKEN` precisam ter pelo menos 32 caracteres. O callback OAuth usa obrigatoriamente a mesma `HTTP_PORT`: existe somente um listener HTTP. A redacao de logs e obrigatoria; `MIDDLEWARE_REDACT_LOGS=false` impede o boot.
+
 Subir o servico:
 
 ```sh
@@ -122,6 +124,7 @@ go run ./cmd/middleware-codex-oauth 2>&1 | tee /tmp/middleware-auth.log
 ```
 
 Cada request gera uma linha `http_request` com `method`, `path`, `status`, `duration_ms` e `remote`. O header `Authorization` nao e logado.
+Respostas JSON usam `Cache-Control: no-store`; nao as armazene em proxy ou navegador.
 
 Check anti-segredo:
 

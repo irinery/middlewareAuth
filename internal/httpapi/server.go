@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -81,7 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		h.logger.InfoContext(r.Context(), "http_request",
 			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
+			slog.String("path", security.Redact(r.URL.Path)),
 			slog.Int("status", rec.status),
 			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.String("remote", r.RemoteAddr),
@@ -154,11 +155,22 @@ func (h *Handler) authorized(r *http.Request) bool {
 	if expected == "" {
 		return false
 	}
-	if r.Header.Get("X-Middleware-Token") == expected {
+	if tokensEqual(r.Header.Get("X-Middleware-Token"), expected) {
 		return true
 	}
 	authz := r.Header.Get("Authorization")
-	return strings.TrimSpace(authz) == "Bearer "+expected
+	const bearer = "Bearer "
+	if !strings.HasPrefix(authz, bearer) {
+		return false
+	}
+	return tokensEqual(strings.TrimSpace(strings.TrimPrefix(authz, bearer)), expected)
+}
+
+func tokensEqual(got, expected string) bool {
+	if len(got) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
 func (h *Handler) addSession(session loginSession) error {
@@ -166,7 +178,7 @@ func (h *Handler) addSession(session loginSession) error {
 	defer h.sessionMu.Unlock()
 	h.cleanupSessionsLocked()
 	if len(h.sessions) >= 1000 {
-		return security.NewError("ERR_LOGIN_START_FAILED", "limite de sessoes OAuth pendentes atingido", http.StatusConflict)
+		return security.NewError("ERR_LOGIN_START_FAILED", "limite de sessoes recentes atingido", http.StatusConflict)
 	}
 	copy := session
 	h.sessions[session.LoginSessionID] = &copy
@@ -207,6 +219,7 @@ func (h *Handler) markSessionCompleted(sessionID string) {
 		session.Status = "completed"
 		session.CompletedAt = time.Now().UnixMilli()
 		session.Error = nil
+		h.clearSessionFlowLocked(session)
 	}
 }
 
@@ -217,6 +230,7 @@ func (h *Handler) markSessionFailed(sessionID string, err error) {
 		session.Status = "failed"
 		session.CompletedAt = time.Now().UnixMilli()
 		session.Error = security.Public(err)
+		h.clearSessionFlowLocked(session)
 	}
 }
 
@@ -226,6 +240,7 @@ func (h *Handler) markSessionExpired(sessionID string) {
 	if session := h.sessions[sessionID]; session != nil {
 		session.Status = "expired"
 		session.Error = security.NewError("ERR_LOGIN_SESSION_EXPIRED", "sessao de login expirada", http.StatusGone)
+		h.clearSessionFlowLocked(session)
 	}
 }
 
@@ -239,8 +254,16 @@ func (h *Handler) loginSessionResponse(projectID, sessionID string) (*LoginSessi
 	if session.Status == "pending" && session.ExpiresAt <= time.Now().UnixMilli() {
 		session.Status = "expired"
 		session.Error = security.NewError("ERR_LOGIN_SESSION_EXPIRED", "sessao de login expirada", http.StatusGone)
+		h.clearSessionFlowLocked(session)
 	}
 	return session.response(), nil
+}
+
+func (h *Handler) clearSessionFlowLocked(session *loginSession) {
+	if state := session.Flow.State; state != "" {
+		delete(h.stateIndex, state)
+	}
+	session.Flow = oauth.AuthorizationFlow{}
 }
 
 func (h *Handler) cleanupSessionsLocked() {

@@ -55,6 +55,7 @@ func LoginWithDeviceCode(ctx context.Context, cfg config.Config, callbacks Devic
 }
 
 func RequestDeviceCode(ctx context.Context, client *http.Client, cfg config.OAuthConfig) (*RequestedDeviceCode, error) {
+	client = noRedirectClient(client)
 	payload := map[string]string{"client_id": cfg.ClientID}
 	body, _ := json.Marshal(payload)
 	url := strings.TrimRight(cfg.AuthBaseURL, "/") + "/api/accounts/deviceauth/usercode"
@@ -104,6 +105,7 @@ func RequestDeviceCode(ctx context.Context, client *http.Client, cfg config.OAut
 }
 
 func PollDeviceCode(ctx context.Context, client *http.Client, cfg config.OAuthConfig, device RequestedDeviceCode) (*OAuthCredentials, error) {
+	client = noRedirectClient(client)
 	if device.IntervalMs < 1000 {
 		device.IntervalMs = 5000
 	}

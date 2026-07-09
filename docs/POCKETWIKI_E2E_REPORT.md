@@ -1,5 +1,7 @@
 # PocketWiki + middlewareAuth: relatorio de teste ponta a ponta
 
+> Registro historico do teste de 2026-06-01. Os valores fracos e qualquer referencia a `1455` abaixo descrevem o incidente original e nao sao configuracao operacional. O fluxo atual usa somente `http://localhost:18787/v1/auth/openai/callback`; siga [docs/ACCESS.md](./ACCESS.md) para iniciar o middleware com secrets de 32+ caracteres.
+
 Data do teste: 2026-06-01  
 Projeto testado no middleware: `acme`  
 Perfil testado: `default`  
@@ -51,8 +53,8 @@ export MIDDLEWARE_STATE_DIR='/Users/irinery/Documents/middlewareAuth/.middleware
 Variaveis usadas nos testes:
 
 ```sh
-export MIDDLEWARE_SECRET_KEY='dev-only-change-me-dev-only-change-me'
-export MIDDLEWARE_CLIENT_TOKEN='dev-middleware-token'
+export MIDDLEWARE_SECRET_KEY='<secret seguro de 32+ caracteres>'
+export MIDDLEWARE_CLIENT_TOKEN='<token seguro de 32+ caracteres>'
 export MIDDLEWARE_STATE_DIR='.middleware-state'
 export HTTP_PORT=18787
 export MIDDLEWARE_BASE_URL='http://localhost:18787'
@@ -134,7 +136,7 @@ Nao e bug do middleware. Foi erro de comando no teste. O formato correto e:
 
 ```sh
 env MIDDLEWARE_BASE_URL=http://localhost:18787 \
-  MIDDLEWARE_CLIENT_TOKEN=dev-middleware-token \
+  MIDDLEWARE_CLIENT_TOKEN='<token seguro de 32+ caracteres>' \
   MCP_DEFAULT_PROJECT_ID=acme \
   /Users/irinery/Documents/middlewareAuth/bin/middleware-codex-oauth-mcp
 ```
@@ -161,7 +163,7 @@ Teste direto HTTP:
 
 ```sh
 curl -sS -i \
-  -H 'Authorization: Bearer dev-middleware-token' \
+  -H 'Authorization: Bearer <token seguro de 32+ caracteres>' \
   'http://localhost:18787/v1/projects/acme/auth/openai/status?profileId=default'
 ```
 
@@ -545,8 +547,8 @@ Rodando em foreground, funcionou:
 ```sh
 cd /Users/irinery/Documents/middlewareAuth
 env \
-  MIDDLEWARE_SECRET_KEY='dev-only-change-me-dev-only-change-me' \
-  MIDDLEWARE_CLIENT_TOKEN='dev-middleware-token' \
+  MIDDLEWARE_SECRET_KEY='<secret seguro de 32+ caracteres>' \
+  MIDDLEWARE_CLIENT_TOKEN='<token seguro de 32+ caracteres>' \
   MIDDLEWARE_STATE_DIR='.middleware-state' \
   HTTP_PORT=18787 \
   ./bin/middleware-codex-oauth

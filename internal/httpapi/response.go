@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,7 +16,11 @@ type MiddlewareErrorResponse struct {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
@@ -34,7 +39,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, out any) e
 		}
 		return security.Wrap("ERR_INVALID_JSON", "falha ao ler payload", http.StatusBadRequest, err)
 	}
-	if len(strings.TrimSpace(string(raw))) == 0 {
+	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {

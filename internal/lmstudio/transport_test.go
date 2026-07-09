@@ -63,3 +63,61 @@ func TestValidateBaseURLRejectsPublicHost(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+func TestValidateBaseURLRejectsAmbiguousParts(t *testing.T) {
+	for _, raw := range []string{
+		"http://127.0.0.1:1234?access_token=secret",
+		"http://127.0.0.1:1234#fragment",
+		"http://user:password@127.0.0.1:1234",
+		"http://127.0.0.1:0",
+	} {
+		if err := ValidateBaseURL(raw); err == nil {
+			t.Fatalf("ValidateBaseURL(%q) aceitou URL invalida", raw)
+		}
+	}
+}
+
+func TestTransportDoesNotFollowRedirectsWithAPIKey(t *testing.T) {
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+		if r.Header.Get("Authorization") != "" {
+			t.Fatalf("API key chegou ao redirect target: %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	_, err := NewTransport(source.Client()).ListModels(context.Background(), source.URL, "local-api-key")
+	if err == nil {
+		t.Fatal("esperava erro para redirect LM Studio")
+	}
+	if targetCalled {
+		t.Fatal("transport seguiu redirect LM Studio")
+	}
+}
+
+func TestTransportParsesMislabelledSSEAndKeepsMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("event: message\ndata: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+			"event: message\ndata: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\" lmstudio\"}}]}\n\n" +
+			"event: message\ndata: {\"id\":\"chatcmpl-1\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n" +
+			"data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	response, err := NewTransport(server.Client()).SendResponse(context.Background(), server.URL, "local-api-key", codex.CodexResponseRequest{
+		Model: "model-a",
+		Input: []codex.CodexInputItem{{Role: "user", Content: "oi"}},
+	})
+	if err != nil {
+		t.Fatalf("SendResponse() error = %v", err)
+	}
+	if response.OutputText != "ok lmstudio" || response.ResponseID != "chatcmpl-1" || response.Usage.TotalTokens != 5 {
+		t.Fatalf("response = %#v", response)
+	}
+}

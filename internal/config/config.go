@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"net/http"
 	"net/url"
@@ -136,16 +137,27 @@ func (cfg *Config) validate(ctx context.Context) error {
 		cfg.Security.SecretKey = "dev-only-change-me-dev-only-change-me"
 	}
 	if cfg.Security.MiddlewareToken == "" && cfg.Environment == "test" {
-		cfg.Security.MiddlewareToken = "dev-middleware-token"
+		cfg.Security.MiddlewareToken = "dev-middleware-token-for-tests-only"
 	}
+	cfg.Security.SecretKey = strings.TrimSpace(cfg.Security.SecretKey)
+	cfg.Security.MiddlewareToken = strings.TrimSpace(cfg.Security.MiddlewareToken)
 	if len(cfg.Security.SecretKey) < 32 {
 		return security.NewError("ERR_SECRET_KEY_REQUIRED", "MIDDLEWARE_SECRET_KEY precisa ter 32+ caracteres", http.StatusBadRequest)
 	}
-	if cfg.Security.MiddlewareToken == "" {
-		return security.NewError("ERR_CLIENT_TOKEN_REQUIRED", "MIDDLEWARE_CLIENT_TOKEN e obrigatorio", http.StatusBadRequest)
+	if len(cfg.Security.MiddlewareToken) < 32 {
+		return security.NewError("ERR_CLIENT_TOKEN_REQUIRED", "MIDDLEWARE_CLIENT_TOKEN precisa ter 32+ caracteres", http.StatusBadRequest)
+	}
+	if !cfg.Security.RedactLogs {
+		return security.NewError("ERR_LOG_REDACTION_REQUIRED", "MIDDLEWARE_REDACT_LOGS nao pode ser desabilitado", http.StatusBadRequest)
 	}
 	if !isPort(cfg.OAuth.CallbackPort) || !isPort(cfg.HTTP.Port) {
 		return security.NewError("ERR_INVALID_PORT", "porta fora do intervalo 1..65535", http.StatusBadRequest)
+	}
+	if cfg.OAuth.CallbackPort != cfg.HTTP.Port {
+		return security.NewError("ERR_OAUTH_CALLBACK_MISMATCH", "OAUTH_CALLBACK_PORT precisa ser igual a HTTP_PORT no servidor unico", http.StatusBadRequest)
+	}
+	if err := validateRuntimeLimits(cfg); err != nil {
+		return err
 	}
 	if cfg.HTTP.BindAddr == "" {
 		cfg.HTTP.BindAddr = "127.0.0.1"
@@ -176,22 +188,47 @@ func (cfg *Config) validate(ctx context.Context) error {
 		return security.Wrap("ERR_CONTEXT_CANCELLED", "contexto cancelado durante boot", http.StatusRequestTimeout, ctx.Err())
 	default:
 	}
-	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
-		return security.Wrap("ERR_STATE_DIR_UNAVAILABLE", "state dir indisponivel", http.StatusInternalServerError, err)
+	stateDir, err := secureStateDir(cfg.StateDir)
+	if err != nil {
+		return err
 	}
-	if err := os.Chmod(cfg.StateDir, 0o700); err != nil {
-		return security.Wrap("ERR_STATE_DIR_UNAVAILABLE", "nao foi possivel ajustar permissao do state dir", http.StatusInternalServerError, err)
-	}
-	abs, err := filepath.Abs(cfg.StateDir)
-	if err == nil {
-		cfg.StateDir = abs
-	}
+	cfg.StateDir = stateDir
 	return nil
+}
+
+func secureStateDir(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", security.Wrap("ERR_STATE_DIR_UNAVAILABLE", "state dir invalido", http.StatusInternalServerError, err)
+	}
+	if abs == string(filepath.Separator) {
+		return "", security.NewError("ERR_STATE_DIR_UNAVAILABLE", "state dir nao pode ser a raiz do sistema", http.StatusBadRequest)
+	}
+	if cwd, err := os.Getwd(); err == nil && abs == cwd {
+		return "", security.NewError("ERR_STATE_DIR_UNAVAILABLE", "state dir precisa ser um diretorio dedicado", http.StatusBadRequest)
+	}
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return "", security.Wrap("ERR_STATE_DIR_UNAVAILABLE", "state dir indisponivel", http.StatusInternalServerError, err)
+	}
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return "", security.Wrap("ERR_STATE_DIR_UNAVAILABLE", "nao foi possivel inspecionar state dir", http.StatusInternalServerError, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", security.NewError("ERR_STATE_DIR_UNAVAILABLE", "state dir precisa ser um diretorio real, sem link simbolico", http.StatusBadRequest)
+	}
+	if err := os.Chmod(abs, 0o700); err != nil {
+		return "", security.Wrap("ERR_STATE_DIR_UNAVAILABLE", "nao foi possivel ajustar permissao do state dir", http.StatusInternalServerError, err)
+	}
+	return abs, nil
 }
 
 func NewHTTPClient(cfg CodexConfig) *http.Client {
 	return &http.Client{
 		Timeout: time.Duration(cfg.RequestTimeoutMs) * time.Millisecond,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 		Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			MaxIdleConns:          cfg.MaxIdleConns,
@@ -199,6 +236,7 @@ func NewHTTPClient(cfg CodexConfig) *http.Client {
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}
 }
@@ -211,6 +249,7 @@ func NewHTTPServer(cfg HTTPConfig, handler http.Handler) *http.Server {
 		ReadTimeout:       time.Duration(cfg.ReadTimeoutMs) * time.Millisecond,
 		WriteTimeout:      time.Duration(cfg.WriteTimeoutMs) * time.Millisecond,
 		IdleTimeout:       time.Duration(cfg.IdleTimeoutMs) * time.Millisecond,
+		MaxHeaderBytes:    64 << 10,
 	}
 }
 
@@ -313,5 +352,35 @@ func ensureHTTPURL(rawURL string) error {
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {
 		return security.NewError("ERR_HOST_NOT_ALLOWED", "URL externa precisa ser http ou https", http.StatusBadRequest)
 	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.HasSuffix(parsed.Host, ":") {
+		return security.NewError("ERR_HOST_NOT_ALLOWED", "URL externa nao pode conter userinfo, query ou fragmento", http.StatusBadRequest)
+	}
+	if port := parsed.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return security.NewError("ERR_HOST_NOT_ALLOWED", "porta da URL externa invalida", http.StatusBadRequest)
+		}
+	}
 	return nil
+}
+
+func validateRuntimeLimits(cfg *Config) error {
+	if !inRange(cfg.HTTP.ReadHeaderTimeoutMs, 1000, 60000) ||
+		!inRange(cfg.HTTP.ReadTimeoutMs, 1000, 300000) ||
+		!inRange(cfg.HTTP.WriteTimeoutMs, 1000, 300000) ||
+		!inRange(cfg.HTTP.IdleTimeoutMs, 1000, 600000) ||
+		cfg.HTTP.MaxBodyBytes < 1024 || cfg.HTTP.MaxBodyBytes > 10<<20 {
+		return security.NewError("ERR_HTTP_CONFIG_INVALID", "timeouts HTTP ou limite de payload invalidos", http.StatusBadRequest)
+	}
+	if !inRange(cfg.Codex.RequestTimeoutMs, 1000, 300000) ||
+		!inRange(cfg.Codex.MaxRetries, 0, 10) ||
+		!inRange(cfg.Codex.MaxIdleConns, 1, 1000) ||
+		!inRange(cfg.Codex.MaxIdleConnsPerHost, 1, 1000) {
+		return security.NewError("ERR_CODEX_CONFIG_INVALID", "timeouts ou pool Codex invalidos", http.StatusBadRequest)
+	}
+	return nil
+}
+
+func inRange(value, min, max int) bool {
+	return value >= min && value <= max
 }

@@ -14,7 +14,7 @@ func TestAuditEventDoesNotLeakTokens(t *testing.T) {
 	cfg, err := config.LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestAuditRejectsSensitiveMetadata(t *testing.T) {
 	cfg, err := config.LoadConfig(context.Background(), map[string]string{
 		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
 		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
-		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,5 +55,28 @@ func TestAuditRejectsSensitiveMetadata(t *testing.T) {
 	})
 	if security.Code(err) != "ERR_AUDIT_EVENT_INVALID" {
 		t.Fatalf("code = %s, want ERR_AUDIT_EVENT_INVALID (%v)", security.Code(err), err)
+	}
+}
+
+func TestAuditRejectsSymbolicLink(t *testing.T) {
+	cfg, err := config.LoadConfig(context.Background(), map[string]string{
+		"MIDDLEWARE_STATE_DIR":    t.TempDir(),
+		"MIDDLEWARE_SECRET_KEY":   "test-secret-key-with-32-characters!!",
+		"MIDDLEWARE_CLIENT_TOKEN": "test-middleware-token-32-characters",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditor := NewAuditor(*cfg)
+	target := auditor.path + ".target"
+	if err := os.WriteFile(target, []byte("audit target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, auditor.path); err != nil {
+		t.Skipf("symlink indisponivel: %v", err)
+	}
+	_, err = auditor.AuditEvent(context.Background(), AuditEvent{Type: "LOGIN_COMPLETED", ProjectID: "acme", Provider: "openai"})
+	if security.Code(err) != "ERR_AUDIT_WRITE_FAILED" {
+		t.Fatalf("code = %s, want ERR_AUDIT_WRITE_FAILED (%v)", security.Code(err), err)
 	}
 }

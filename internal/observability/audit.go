@@ -2,7 +2,10 @@ package observability
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,7 +58,11 @@ func (a *Auditor) AuditEvent(ctx context.Context, event AuditEvent) (*AuditWrite
 	}
 	now := time.Now().UnixMilli()
 	if event.EventID == "" {
-		event.EventID = randomAuditID()
+		eventID, err := randomAuditID()
+		if err != nil {
+			return nil, err
+		}
+		event.EventID = eventID
 	}
 	if event.Provider == "" {
 		event.Provider = "openai"
@@ -73,6 +80,11 @@ func (a *Auditor) AuditEvent(ctx context.Context, event AuditEvent) (*AuditWrite
 	if err := os.MkdirAll(filepath.Dir(a.path), 0o700); err != nil {
 		return nil, security.Wrap("ERR_AUDIT_WRITE_FAILED", "falha ao criar diretorio de auditoria", http.StatusInternalServerError, err)
 	}
+	if info, err := os.Lstat(a.path); err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return nil, security.NewError("ERR_AUDIT_WRITE_FAILED", "audit log precisa ser um arquivo regular", http.StatusInternalServerError)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, security.Wrap("ERR_AUDIT_WRITE_FAILED", "nao foi possivel inspecionar audit log", http.StatusInternalServerError, err)
+	}
 	file, err := os.OpenFile(a.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, security.Wrap("ERR_AUDIT_WRITE_FAILED", "falha ao abrir audit log", http.StatusInternalServerError, err)
@@ -80,6 +92,9 @@ func (a *Auditor) AuditEvent(ctx context.Context, event AuditEvent) (*AuditWrite
 	defer file.Close()
 	if _, err := file.Write(append(raw, '\n')); err != nil {
 		return nil, security.Wrap("ERR_AUDIT_WRITE_FAILED", "falha ao gravar audit log", http.StatusInternalServerError, err)
+	}
+	if err := file.Sync(); err != nil {
+		return nil, security.Wrap("ERR_AUDIT_WRITE_FAILED", "falha ao sincronizar audit log", http.StatusInternalServerError, err)
 	}
 	return &AuditWriteResult{EventID: event.EventID, WrittenAt: now}, nil
 }
@@ -105,6 +120,10 @@ func validateAuditEvent(event AuditEvent) error {
 	return nil
 }
 
-func randomAuditID() string {
-	return "audit-" + time.Now().UTC().Format("20060102150405.000000000")
+func randomAuditID() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", security.Wrap("ERR_AUDIT_WRITE_FAILED", "falha ao gerar identificador de auditoria", http.StatusInternalServerError, err)
+	}
+	return "audit-" + hex.EncodeToString(raw), nil
 }

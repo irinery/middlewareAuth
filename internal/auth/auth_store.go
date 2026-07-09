@@ -174,12 +174,15 @@ func (s *FileStore) LoadProviderCredential(ctx context.Context, providerID strin
 }
 
 func (s *FileStore) readStore() (*AuthProfileStore, error) {
-	info, err := os.Stat(s.path)
+	info, err := os.Lstat(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return &AuthProfileStore{Version: 1, Profiles: []AuthProfileRecord{}, UpdatedAt: time.Now().UnixMilli()}, nil
 	}
 	if err != nil {
 		return nil, security.Wrap("ERR_AUTH_STORE_CORRUPTED", "store indisponivel", http.StatusInternalServerError, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, security.NewError("ERR_AUTH_STORE_CORRUPTED", "store precisa ser um arquivo regular, sem link simbolico", http.StatusInternalServerError)
 	}
 	if info.Size() > maxStoreBytes {
 		return nil, security.NewError("ERR_AUTH_STORE_CORRUPTED", "store excede tamanho maximo", http.StatusInternalServerError)
@@ -192,8 +195,11 @@ func (s *FileStore) readStore() (*AuthProfileStore, error) {
 	if err := json.Unmarshal(raw, &store); err != nil {
 		return nil, security.Wrap("ERR_AUTH_STORE_CORRUPTED", "store corrompido", http.StatusInternalServerError, err)
 	}
-	if store.Version == 0 {
+	if store.Version != 1 {
 		return nil, security.NewError("ERR_AUTH_STORE_CORRUPTED", "schema do store invalido", http.StatusInternalServerError)
+	}
+	if len(store.Profiles) > 1000 {
+		return nil, security.NewError("ERR_AUTH_STORE_CORRUPTED", "store excede limite de perfis", http.StatusInternalServerError)
 	}
 	if store.Profiles == nil {
 		store.Profiles = []AuthProfileRecord{}
@@ -211,6 +217,11 @@ func (s *FileStore) writeStore(store *AuthProfileStore) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return security.Wrap("ERR_AUTH_STORE_WRITE_FAILED", "falha ao criar state dir", http.StatusInternalServerError, err)
+	}
+	if info, err := os.Lstat(s.path); err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return security.NewError("ERR_AUTH_STORE_WRITE_FAILED", "store existente nao e um arquivo regular", http.StatusInternalServerError)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return security.Wrap("ERR_AUTH_STORE_WRITE_FAILED", "nao foi possivel inspecionar store", http.StatusInternalServerError, err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".auth-profiles-*.tmp")
 	if err != nil {
