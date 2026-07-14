@@ -1,5 +1,10 @@
 # Acesso local
 
+Os exemplos abaixo usam somente a API canonica `llm/*`. O contrato completo e
+os payloads prontos para frontend ficam em
+[`LLM_PROVIDER_CONTRACT.md`](./LLM_PROVIDER_CONTRACT.md) e
+[`examples/llm-http-payloads.json`](./examples/llm-http-payloads.json).
+
 Porta default: `18787`.
 Bind default: `127.0.0.1`.
 
@@ -30,22 +35,22 @@ Healthcheck sem auth:
 curl -s http://localhost:18787/healthz
 ```
 
-Status de perfil:
+Catalogo de providers:
 
 ```sh
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
-  "http://localhost:18787/v1/projects/acme/auth/openai/status?profileId=default"
+  "http://localhost:18787/v1/projects/acme/llm/providers"
 ```
 
-Iniciar login OAuth:
+Iniciar login OAuth pelo contrato canonico:
 
 ```sh
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"profileId":"default","mode":"oauth"}' \
-  http://localhost:18787/v1/projects/acme/auth/openai/login
+  -d '{"providerId":"openai","profileId":"default","mode":"oauth"}' \
+  http://localhost:18787/v1/projects/acme/llm/login
 ```
 
 Consultar status operacional da sessao de login:
@@ -53,7 +58,7 @@ Consultar status operacional da sessao de login:
 ```sh
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
-  "http://localhost:18787/v1/projects/acme/auth/openai/login-sessions/<loginSessionId>"
+  "http://localhost:18787/v1/projects/acme/llm/login-sessions/<loginSessionId>?providerId=openai&profileId=default"
 ```
 
 Iniciar device-code:
@@ -62,24 +67,26 @@ Iniciar device-code:
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"profileId":"default","mode":"device_code"}' \
-  http://localhost:18787/v1/projects/acme/auth/openai/login
+  -d '{"providerId":"openai","profileId":"default","mode":"device_code"}' \
+  http://localhost:18787/v1/projects/acme/llm/login
 ```
 
-Chamar Codex depois de autenticar um perfil:
+Chamar OpenAI depois de autenticar um perfil:
 
 ```sh
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
+	"providerId": "openai",
+	"profileId": "default",
     "model": "gpt-5.5",
     "intelligence": "thinking",
     "reasoning": {"effort": "high"},
     "input": [{"role":"user","content":"responda ok"}],
     "stream": true
   }' \
-  "http://localhost:18787/v1/projects/acme/codex/responses?profileId=default"
+  "http://localhost:18787/v1/projects/acme/llm/responses"
 ```
 
 Pelo MCP, tambem da para usar `reasoningEffort="estendido"`; o wrapper converte esse alias para `reasoning.effort="high"`. Para valores novos do backend, passe `reasoning` ou `extra` diretamente.
@@ -91,11 +98,15 @@ curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
+	"providerId": "lmstudio",
     "profileId": "default",
-    "baseUrl": "http://127.0.0.1:1234",
-    "apiKey": "<api key do LM Studio>"
+	"mode": "api_key",
+	"authFields": {
+	  "baseUrl": "http://127.0.0.1:1234",
+	  "apiKey": "<secret>"
+	}
   }' \
-  http://localhost:18787/v1/projects/acme/auth/lmstudio/api-key
+  http://localhost:18787/v1/projects/acme/llm/login
 ```
 
 Chamar LM Studio pelo middleware:
@@ -105,11 +116,13 @@ curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
+	"providerId": "lmstudio",
+	"profileId": "default",
     "model": "local-model",
     "input": [{"role":"user","content":"responda ok"}],
     "stream": false
   }' \
-  "http://localhost:18787/v1/projects/acme/lmstudio/responses?profileId=default"
+  "http://localhost:18787/v1/projects/acme/llm/responses"
 ```
 
 Logs locais:

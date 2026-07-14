@@ -1,94 +1,86 @@
-# Contrato tecnico: provedores LLM no middlewareAuth
+# Contrato canonico de provedores LLM
 
-Este documento define um contrato MCP generico para provedores de LLM no `middlewareAuth`.
-Ele nao depende de PocketWiki, Codex Desktop, UI especifica ou qualquer cliente consumidor.
+Versao do contrato: `middlewareauth.llm.v1`.
 
-O objetivo e permitir que novos provedores sejam adicionados ao middleware sem criar uma tool MCP nova para cada tela ou app.
+Este arquivo e a fonte de verdade para aplicacoes que consomem o `middlewareAuth` por HTTP ou MCP. Os exemplos completos e prontos para fixture estao em [`examples/llm-http-payloads.json`](./examples/llm-http-payloads.json).
 
-## Conceitos
+## Limite de responsabilidade
 
-### Provider
+Cada projeto tem que funcionar sozinho. O `middlewareAuth` melhora a integracao entre os projetos, mas nunca pode ser dependencia bloqueante para build, testes ou funcionalidades locais de uma aplicacao consumidora.
 
-Um provider e uma integracao LLM autenticavel ou configuravel pelo middleware.
+O `middlewareAuth` e a caixa-preta responsavel por:
 
-Regras:
+- autenticar e armazenar credenciais por `providerId + projectId + profileId`;
+- fazer refresh, quando suportado;
+- escolher e chamar o adapter interno do provider;
+- proteger tokens e API keys;
+- normalizar catalogo, status, login, resposta e erros.
 
-- `providerId` e estavel, minusculo e sem espacos. Exemplos: `openai`, `anthropic`, `google`, `azure-openai`.
-- `profileId` identifica uma credencial/conta dentro de um projeto.
-- `projectId` separa tenants/projetos do middleware.
-- O middleware e dono do ciclo de auth, refresh, armazenamento de token e chamada ao backend do provider.
-- O cliente MCP nao deve receber access token, refresh token ou segredo bruto.
+A aplicacao consumidora e responsavel por:
 
-### Modelo
+- configurar apenas `baseURL`, token interno, `projectId`, `providerId` e `profileId`;
+- montar a experiencia usando o catalogo e as capabilities publicas;
+- decodificar o envelope generico e converte-lo para seu dominio;
+- manter fluxo local/fallback quando o middleware estiver ausente ou indisponivel.
 
-`model` e sempre uma string livre e provider-specific.
+O consumidor nao deve conhecer rotas como `/codex`, `/lmstudio` ou `/auth/openai`, nem formatos nativos dos providers. Essas rotas continuam disponiveis apenas para compatibilidade com clientes legados.
 
-Exemplos:
+## Convencoes HTTP
+
+Base local padrao:
 
 ```text
-gpt-5.5
-lmstudio/local-model
-claude-4.5-sonnet
-gemini-2.5-pro
+http://127.0.0.1:18787
 ```
 
-O middleware pode expor presets no catalogo de providers, mas deve aceitar `model` livre em `llm_responses` para nao bloquear modelos novos.
+Toda rota de projeto exige:
 
-### Raciocinio
+```http
+Authorization: Bearer <MIDDLEWARE_CLIENT_TOKEN>
+Accept: application/json
+```
 
-Campos de comportamento devem ser opcionais.
+Requests com corpo tambem usam `Content-Type: application/json`. `projectId`, `profileId` e `providerId` sao identificadores em minusculas, sem espacos. Todos os timestamps sao Unix epoch em milissegundos.
 
-Campos recomendados:
+## Campos estaveis
+
+Enquanto `contractVersion` continuar em `middlewareauth.llm.v1`, estes nomes e
+significados sao estaveis: `providerId`, `projectId`, `profileId`,
+`authenticated`, `status`, `loginSessionId`, `events`, `responseId`, `usage`,
+`outputText`, `error.code` e `error.message`. Campos opcionais podem ser
+omitidos quando nao se aplicam. Clientes precisam ignorar campos de resposta
+desconhecidos para aceitar adicoes compativeis no v1.
+
+Mudanca de nome, tipo ou semantica de um campo estavel exige nova versao major
+do contrato. A ordem de propriedades JSON e a ordem dos providers nao fazem
+parte do contrato.
+
+## Valores provider-specific e metadata
+
+Valores de `models[].id`, `auth.modes[]`, descritores de `auth.fields`,
+`model`, `accountId`, `baseUrl`, `email` e `planType` podem variar por provider.
+O cliente descobre esses valores pelo catalogo e nao deve codificar regras como
+`if providerId == "lmstudio"`.
+
+`authFields` e o unico container de entrada para valores dinamicos de
+autenticacao. `extra` e um escape hatch provider-specific para inferencia; ele
+nao pode sobrescrever campos estaveis e so deve ser usado quando uma capability
+ou documentacao do adapter exigir. `metadata` fica reservado como container de
+saida para extensoes futuras: suas chaves internas nao sao estaveis e o cliente
+nao pode depender delas para o fluxo principal. O runtime atual nao precisa
+emitir `metadata`.
+
+## Catalogo
+
+```http
+GET /v1/projects/{projectId}/llm/providers
+```
+
+Resposta:
 
 ```json
 {
-  "intelligence": "thinking",
-  "reasoningEffort": "medium",
-  "reasoning": { "effort": "medium" }
-}
-```
-
-`reasoningEffort` e o campo portavel. `reasoning` e o objeto bruto para providers que tenham formato proprio.
-
-## Tools MCP genericas
-
-As tools genericas recomendadas sao:
-
-```text
-llm_providers
-llm_login_start
-llm_login_status
-llm_status
-llm_refresh
-llm_responses
-```
-
-As tools atuais especificas de OpenAI podem continuar existindo por compatibilidade:
-
-```text
-openai_login_start
-openai_login_status
-openai_status
-openai_refresh
-codex_responses
-```
-
-Implementacao recomendada: as tools legadas chamam internamente as genericas usando `providerId = "openai"`.
-
-## `llm_providers`
-
-Lista providers suportados e suas capacidades.
-
-Entrada:
-
-```json
-{}
-```
-
-Saida:
-
-```json
-{
+  "contractVersion": "middlewareauth.llm.v1",
   "providers": [
     {
       "id": "openai",
@@ -96,7 +88,8 @@ Saida:
       "auth": {
         "required": true,
         "modes": ["oauth", "device_code"],
-        "defaultMode": "device_code"
+        "defaultMode": "device_code",
+        "fields": []
       },
       "defaults": {
         "profileId": "default",
@@ -108,217 +101,182 @@ Saida:
       ],
       "capabilities": {
         "stream": true,
+        "refresh": true,
+        "intelligence": true,
         "reasoningEffort": true,
         "systemInstructions": true,
-        "tools": false
-      }
-    },
-    {
-      "id": "lmstudio",
-      "title": "LM Studio",
-      "auth": {
-        "required": true,
-        "modes": ["api_key"],
-        "defaultMode": "api_key"
-      },
-      "defaults": {
-        "profileId": "default",
-        "model": "local-model"
-      },
-      "models": [
-        { "id": "local-model", "title": "local-model" }
-      ],
-      "capabilities": {
-        "stream": true,
-        "reasoningEffort": false,
-        "systemInstructions": true,
-        "tools": false
+        "tools": false,
+        "store": true
       }
     }
   ]
 }
 ```
 
-Campos obrigatorios por provider:
+A UI deve derivar os controles de `auth`, `auth.fields`, `defaults`, `models` e `capabilities`; nao deve condicionar comportamento ao nome do provider. Um field descreve `id`, `title`, `type`, `required` e `secret`. `models` pode estar vazio, especialmente para providers locais. Nesse caso, aceite um model informado pelo usuario.
 
-- `id`
-- `title`
-- `auth.required`
-- `defaults.profileId`
-- `defaults.model`
-- `capabilities.stream`
+Semantica das capabilities:
 
-## `llm_login_start`
+| Campo | Quando `true` |
+| --- | --- |
+| `stream` | O adapter pode pedir streaming ao provider; a resposta HTTP continua sendo um JSON normalizado e agregado. |
+| `refresh` | A UI pode exibir acao de refresh. |
+| `intelligence` | A UI pode enviar o seletor livre `intelligence`. |
+| `reasoningEffort` | A UI pode enviar `reasoning` ou o alias MCP `reasoningEffort`. |
+| `systemInstructions` | A UI pode enviar `instructions`. |
+| `tools` | A UI pode enviar `tools`. |
+| `store` | A UI pode oferecer o controle `store`. |
 
-Inicia login para um provider.
+Se uma capability for `false`, o consumidor nao deve exibir nem enviar o
+controle correspondente. O catalogo completo dos providers atuais esta no
+fixture versionado e e comparado automaticamente com o runtime pelos testes.
 
-Entrada:
+## Login
+
+```http
+POST /v1/projects/{projectId}/llm/login
+```
+
+OAuth ou device code:
 
 ```json
 {
   "providerId": "openai",
-  "projectId": "acme",
   "profileId": "default",
   "mode": "device_code"
 }
 ```
 
-Saida:
+API key configurada no middleware:
 
 ```json
 {
-  "loginSessionId": "sess_123",
-  "authUrl": "https://...",
-  "verificationUrl": "https://...",
-  "userCode": "ABCD-EFGH",
-  "expiresAt": 1780000000
+  "providerId": "lmstudio",
+  "profileId": "default",
+  "mode": "api_key",
+  "authFields": {
+    "baseUrl": "http://127.0.0.1:1234",
+    "apiKey": "<secret>"
+  }
 }
 ```
 
-Notas:
-
-- `authUrl` e usado quando o cliente pode abrir o navegador direto.
-- `verificationUrl` + `userCode` e usado em device-code flow.
-- `api_key` e usado por providers locais/API-key, como LM Studio; a chave entra no middleware e nao volta na resposta.
-- `expiresAt` deve ser Unix epoch em segundos.
-
-## `llm_login_status`
-
-Consulta uma sessao de login iniciada.
-
-Entrada:
+Resposta pendente:
 
 ```json
 {
   "providerId": "openai",
-  "projectId": "acme",
-  "loginSessionId": "sess_123"
-}
-```
-
-Saida:
-
-```json
-{
+  "projectId": "pockettrace",
+  "profileId": "default",
+  "loginSessionId": "sess_123",
+  "mode": "device_code",
   "status": "pending",
   "authenticated": false,
-  "profileId": "default"
+  "verificationUrl": "https://auth.example/device",
+  "userCode": "ABCD-EFGH",
+  "expiresAt": 1780000000000
 }
 ```
 
-Valores recomendados para `status`:
+`authFields` recebe os valores dos IDs publicados pelo catálogo e permite adicionar providers sem mudar o cliente. Campos com `secret=true` devem existir apenas na memoria necessaria para enviar o request e nunca devem ser persistidos pelo frontend, incluidos em URL, log ou telemetria. Dependendo do modo, podem existir `authUrl`, `verificationUrl`, `userCode`, `baseUrl`, `accountId`, `modelCount` e `savedAt` na resposta. `apiKey`, access token e refresh token nunca voltam.
 
-```text
-pending
-authenticated
-expired
-failed
+## Status da sessao de login
+
+```http
+GET /v1/projects/{projectId}/llm/login-sessions/{loginSessionId}?providerId={providerId}&profileId={profileId}
 ```
 
-## `llm_status`
-
-Consulta se existe credencial valida para um provider/profile.
-
-Entrada:
+Resposta:
 
 ```json
 {
   "providerId": "openai",
-  "projectId": "acme",
-  "profileId": "default"
+  "projectId": "pockettrace",
+  "profileId": "default",
+  "loginSessionId": "sess_123",
+  "mode": "device_code",
+  "status": "authenticated",
+  "authenticated": true,
+  "expiresAt": 1780000000000,
+  "completedAt": 1779999900000
 }
 ```
 
-Saida:
+Valores atuais de `status`: `pending`, `authenticated`, `expired` e `failed`.
+Nos dois ultimos casos, a resposta inclui `error` ja normalizado para um codigo
+`ERR_LLM_*`; o consumidor nunca precisa tratar `ERR_LOGIN_*` ou erros nativos do
+provider. Exemplos de todos os estados estao no fixture versionado.
+
+## Status da credencial
+
+```http
+GET /v1/projects/{projectId}/llm/status?providerId={providerId}&profileId={profileId}
+```
+
+Resposta:
 
 ```json
 {
   "authenticated": true,
   "providerId": "openai",
-  "projectId": "acme",
+  "projectId": "pockettrace",
   "profileId": "default",
-  "accountId": "google-oauth2|123",
+  "accountId": "account-123",
   "email": "user@example.com",
   "planType": "plus",
-  "expires": 1780000000
+  "expires": 1780000000000
 }
 ```
 
-Campos opcionais:
+`accountId`, `email`, `planType`, `baseUrl` e `expires` sao opcionais.
 
-- `accountId`
-- `email`
-- `planType`
-- `expires`
-- `metadata`
+## Refresh
 
-## `llm_refresh`
+```http
+POST /v1/projects/{projectId}/llm/refresh
+```
 
-Forca refresh da credencial, quando o provider suportar.
-
-Entrada:
+Request:
 
 ```json
 {
   "providerId": "openai",
-  "projectId": "acme",
   "profileId": "default"
 }
 ```
 
-Saida: mesmo formato de `llm_status`.
+A resposta usa o mesmo contrato de status. Se o provider nao suportar refresh, o middleware retorna `ERR_LLM_REFRESH_UNSUPPORTED`.
 
-Se o provider nao suportar refresh, retornar erro `ERR_LLM_REFRESH_UNSUPPORTED`.
+## Inferencia
 
-## `llm_responses`
+```http
+POST /v1/projects/{projectId}/llm/responses
+```
 
-Executa uma chamada LLM.
-
-Entrada minima:
+Request:
 
 ```json
 {
   "providerId": "openai",
-  "projectId": "acme",
   "profileId": "default",
   "model": "gpt-5.5",
-  "instructions": "Voce e um assistente objetivo.",
+  "instructions": "Responda de forma objetiva.",
   "input": [
-    {
-      "role": "user",
-      "content": "Responda apenas: ok"
-    }
+    { "role": "user", "content": "Responda apenas: ok" }
   ],
   "stream": true,
-  "store": false
+  "store": false,
+  "intelligence": "thinking",
+  "reasoning": {
+    "effort": "medium",
+    "summary": "auto"
+  }
 }
 ```
 
-Entrada com raciocinio:
+`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
 
-```json
-{
-  "providerId": "openai",
-  "projectId": "acme",
-  "profileId": "default",
-  "model": "gpt-5.5",
-  "reasoningEffort": "medium",
-  "reasoning": { "effort": "medium" },
-  "input": "Responda apenas: ok"
-}
-```
-
-Regras de entrada:
-
-- `providerId`, `projectId`, `profileId` e `model` sao obrigatorios.
-- `input` pode ser string simples ou array de mensagens.
-- `instructions` e opcional.
-- `stream` default recomendado: `true`.
-- `store` default recomendado: `false`.
-- Campos desconhecidos podem ser aceitos em `extra`.
-- `extra` nunca deve sobrescrever campos conhecidos.
-
-Saida recomendada:
+Resposta normalizada:
 
 ```json
 {
@@ -327,141 +285,88 @@ Saida recomendada:
       "type": "response.output_text.delta",
       "payload": "{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}"
     },
-    {
-      "type": "done",
-      "payload": ""
-    }
+    { "type": "done" }
   ],
   "responseId": "resp_123",
   "usage": {
     "inputTokens": 10,
     "outputTokens": 1,
     "totalTokens": 11
-  }
+  },
+  "outputText": "ok"
 }
 ```
 
-Importante:
-
-- `events[].payload` deve ser um JSON serializado do evento original ou uma string vazia.
-- Evite retornar SSE aninhado dentro de `payload`; normalize para eventos individuais.
-- Se o backend nativo so entrega SSE, o middleware deve fazer o parse e devolver cada evento no array `events`.
-- Clientes podem tolerar SSE aninhado por compatibilidade, mas isso nao deve ser o formato novo.
+O consumidor deve preferir `outputText`. `events` existe para progresso/compatibilidade e `usage` e opcional.
 
 ## Erros
 
-Formato de erro recomendado no texto da tool MCP:
+Formato unico:
 
 ```json
 {
   "error": {
     "code": "ERR_LLM_AUTH_REQUIRED",
-    "message": "login necessario",
-    "providerId": "openai",
-    "projectId": "acme",
-    "profileId": "default"
+    "message": "autenticacao do provider necessaria"
   }
 }
 ```
 
-Codigos recomendados:
+Codigos publicos:
+
+| Codigo | HTTP esperado | Tratamento do consumidor |
+| --- | ---: | --- |
+| `ERR_LLM_PROVIDER_UNKNOWN` | 400 | Recarregar catalogo ou impedir selecao invalida. |
+| `ERR_LLM_AUTH_REQUIRED` | 401 | Iniciar login/configuracao. |
+| `ERR_LLM_AUTH_EXPIRED` | 401 | Reautenticar. |
+| `ERR_LLM_REFRESH_UNSUPPORTED` | 400 | Ocultar refresh; o catalogo deve publicar `refresh=false`. |
+| `ERR_LLM_REQUEST_INVALID` | 400/413 | Corrigir ou limitar payload. |
+| `ERR_LLM_PROVIDER_UNAVAILABLE` | 502 | Acionar fallback local do consumidor. |
+| `ERR_LLM_RATE_LIMITED` | 429 | Aplicar retry/backoff no consumidor. |
+| `ERR_LLM_RESPONSE_EMPTY` | 502 | Tratar como falha transitoria/fallback. |
+| `ERR_LLM_INTERNAL` | 500 | Tratar como falha transitoria/fallback. |
+
+`error.details` e opcional e serve apenas para validacao de campos. No MCP,
+`providerId`, `projectId` e `profileId` podem aparecer dentro de `error` como
+contexto adicional; o cliente continua tomando decisao somente por `code`.
+
+A aplicacao deve tratar codigo, nao texto. Ausencia do middleware, timeout e `ERR_LLM_PROVIDER_UNAVAILABLE` devem acionar o fallback proprio do consumidor, sem bloquear seu fluxo principal.
+
+## MCP
+
+As tools genericas espelham o contrato HTTP:
 
 ```text
-ERR_LLM_PROVIDER_UNKNOWN
-ERR_LLM_AUTH_REQUIRED
-ERR_LLM_AUTH_EXPIRED
-ERR_LLM_REFRESH_UNSUPPORTED
-ERR_LLM_REQUEST_INVALID
-ERR_LLM_PROVIDER_UNAVAILABLE
-ERR_LLM_RATE_LIMITED
-ERR_LLM_RESPONSE_EMPTY
-ERR_LLM_INTERNAL
+llm_providers
+llm_login_start
+llm_login_status
+llm_status
+llm_refresh
+llm_responses
 ```
 
-## Variaveis de ambiente
+No MCP, `projectId` vai nos argumentos da tool. No HTTP, ele vai no path. Novos consumidores devem usar apenas `llm_*`. As tools e rotas `openai_*`, `codex_responses`, `/auth/openai`, `/codex`, `/auth/lmstudio` e `/lmstudio` sao legadas e ficam restritas a compatibilidade.
 
-Variaveis comuns:
+`llm_providers` tambem recebe `projectId`; a tool consulta o endpoint HTTP
+canonico em vez de manter um catalogo duplicado. Em todas as tools, o resultado
+fica em `result.content[0].text` como JSON do mesmo contrato HTTP. Os argumentos
+completos das seis tools estao no fixture
+[`examples/llm-http-payloads.json`](./examples/llm-http-payloads.json).
 
-```sh
-MIDDLEWARE_BASE_URL='http://localhost:18787'
-MIDDLEWARE_CLIENT_TOKEN='<token gerado para o middleware>'
-MCP_DEFAULT_PROJECT_ID='acme'
-MIDDLEWARE_LLM_PROVIDER='openai'
-MIDDLEWARE_LLM_PROFILE_ID='default'
-MIDDLEWARE_LLM_MODEL='gpt-5.5'
-```
+## Politica de compatibilidade e depreciacao
 
-Variaveis especificas por provider podem existir por compatibilidade:
+As rotas `/v1/projects/{projectId}/llm/*`, as tools `llm_*` e o
+`contractVersion` publicado pelo catalogo sao a API canonica. Novos consumidores
+nao podem usar rotas ou tools provider-specific.
 
-```sh
-MCP_OPENAI_PROFILE_ID='default'
-MCP_OPENAI_MODEL='gpt-5.5'
-MCP_LMSTUDIO_PROFILE_ID='default'
-MCP_LMSTUDIO_MODEL='local-model'
-LMSTUDIO_BASE_URL='http://127.0.0.1:1234'
-LMSTUDIO_API_KEY='<api key enviada apenas ao middleware>'
-```
+As rotas `/auth/openai/*`, `/codex/responses`, `/auth/lmstudio/*` e
+`/lmstudio/responses`, junto das tools `openai_*` e `codex_responses`, sao
+legadas. Elas recebem apenas correcoes de seguranca e compatibilidade, nao novas
+features. Uma remocao exige nova versao major, aviso no changelog e ao menos uma
+release de transicao. Nao existe data de remocao definida no v1.
 
-Preferencia:
-
-1. Variaveis genericas `MIDDLEWARE_LLM_*`
-2. Variaveis especificas do provider
-3. Defaults do `llm_providers`
-
-## Store de credenciais
-
-Cada credencial salva deve ter, no minimo:
-
-```json
-{
-  "provider": "openai",
-  "projectId": "acme",
-  "profileId": "default",
-  "accountId": "provider-account-id",
-  "email": "user@example.com",
-  "expires": 1780000000
-}
-```
-
-Tokens e refresh tokens ficam em campos internos do middleware e nao entram nas respostas MCP.
-
-Chave logica recomendada:
-
-```text
-provider + projectId + profileId
-```
-
-## Checklist para adicionar um provider
-
-1. Registrar provider no catalogo retornado por `llm_providers`.
-2. Implementar auth start/status/refresh se `auth.required = true`.
-3. Persistir credencial usando `provider + projectId + profileId`.
-4. Implementar adapter de request para `llm_responses`.
-5. Normalizar stream nativo para `events[]`.
-6. Mapear erros nativos para codigos `ERR_LLM_*`.
-7. Adicionar teste MCP por stdio para `llm_status` e `llm_responses`.
-8. Manter tool legada, se ja existir cliente consumindo formato antigo.
-
-## Compatibilidade OpenAI atual
-
-O provider `openai` deve mapear:
-
-```text
-llm_login_start(providerId=openai)  -> openai_login_start
-llm_login_status(providerId=openai) -> openai_login_status
-llm_status(providerId=openai)       -> openai_status
-llm_refresh(providerId=openai)      -> openai_refresh
-llm_responses(providerId=openai)    -> codex_responses
-```
-
-O provider `lmstudio` deve mapear:
-
-```text
-llm_login_start(providerId=lmstudio, mode=api_key) -> POST /auth/lmstudio/api-key
-llm_status(providerId=lmstudio)                    -> GET  /auth/lmstudio/status
-llm_refresh(providerId=lmstudio)                   -> ERR_LLM_REFRESH_UNSUPPORTED
-llm_responses(providerId=lmstudio)                 -> POST /lmstudio/responses
-```
-
-Enquanto as tools genericas nao existirem, clientes podem chamar as tools legadas diretamente.
-Quando as tools genericas existirem, novos clientes devem preferir `llm_*`.
+Consumidores apenas referenciam este contrato; nao copiam logica de provider.
+O build, os testes e o runtime do middleware usam somente arquivos e
+dependencias deste repositorio. Da mesma forma, a indisponibilidade do
+middleware deve degradar apenas a integracao opcional, nunca impedir que o
+consumidor inicie ou execute suas funcoes locais.

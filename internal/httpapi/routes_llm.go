@@ -57,9 +57,11 @@ type LLMProviderModel struct {
 type LLMProviderCapabilities struct {
 	Stream             bool `json:"stream"`
 	Refresh            bool `json:"refresh"`
+	Intelligence       bool `json:"intelligence"`
 	ReasoningEffort    bool `json:"reasoningEffort"`
 	SystemInstructions bool `json:"systemInstructions"`
 	Tools              bool `json:"tools"`
+	Store              bool `json:"store"`
 }
 
 type llmLoginRequest struct {
@@ -119,7 +121,7 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, _ *http.Request, _ s
 					{ID: "gpt-5.5", Title: "gpt-5.5"},
 					{ID: "gpt-5", Title: "gpt-5"},
 				},
-				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: true, ReasoningEffort: true, SystemInstructions: true, Tools: false},
+				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: true, Intelligence: true, ReasoningEffort: true, SystemInstructions: true, Tools: false, Store: true},
 			},
 			{
 				ID:    providerLMStudio,
@@ -135,7 +137,7 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, _ *http.Request, _ s
 				},
 				Defaults:     LLMProviderDefaults{ProfileID: "default", Model: "local-model"},
 				Models:       []LLMProviderModel{},
-				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: false, ReasoningEffort: false, SystemInstructions: true, Tools: false},
+				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: false, Intelligence: false, ReasoningEffort: false, SystemInstructions: true, Tools: false, Store: false},
 			},
 		},
 	})
@@ -273,7 +275,7 @@ func (h *Handler) handleLLMLoginStatus(w http.ResponseWriter, r *http.Request, p
 		Authenticated:  authenticated,
 		ExpiresAt:      session.ExpiresAt,
 		CompletedAt:    session.CompletedAt,
-		Error:          session.Error,
+		Error:          publicLLMError(session.Error),
 	})
 }
 
@@ -444,12 +446,23 @@ func writeLLMError(w http.ResponseWriter, err error) {
 	writeError(w, normalizeLLMError(err))
 }
 
+func publicLLMError(err error) *security.AppError {
+	if err == nil {
+		return nil
+	}
+	return security.Public(normalizeLLMError(err))
+}
+
 func normalizeLLMError(err error) error {
 	switch security.Code(err) {
 	case "ERR_LLM_PROVIDER_UNKNOWN", "ERR_LLM_REQUEST_INVALID", "ERR_LLM_REFRESH_UNSUPPORTED":
 		return err
 	case "ERR_AUTH_PROFILE_NOT_FOUND", "ERR_CODEX_ACCOUNT_ID_MISSING":
 		return security.NewError("ERR_LLM_AUTH_REQUIRED", "autenticacao do provider necessaria", http.StatusUnauthorized)
+	case "ERR_LOGIN_SESSION_EXPIRED":
+		return security.NewError("ERR_LLM_AUTH_EXPIRED", "sessao de autenticacao expirada", http.StatusUnauthorized)
+	case "ERR_LOGIN_SESSION_NOT_FOUND":
+		return security.NewError("ERR_LLM_REQUEST_INVALID", "sessao de autenticacao nao encontrada", http.StatusNotFound)
 	case "ERR_CODEX_RATE_LIMITED":
 		return security.NewError("ERR_LLM_RATE_LIMITED", "provider aplicou rate limit", http.StatusTooManyRequests)
 	case "ERR_INVALID_JSON", "ERR_PAYLOAD_TOO_LARGE", "ERR_INVALID_PROFILE_ID", "ERR_INVALID_PROVIDER_ID",

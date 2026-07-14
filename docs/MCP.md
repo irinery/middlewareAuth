@@ -47,8 +47,9 @@ codex_responses
 ```
 
 Clientes novos devem usar `llm_*`. As ferramentas `openai_*` e
-`codex_responses` continuam por compatibilidade e hoje sao o adapter interno do
-provider `openai`.
+`codex_responses` continuam apenas por compatibilidade. As tools genericas
+chamam `/v1/projects/{projectId}/llm/*`; autenticacao e dispatch de provider
+ficam no servidor HTTP canonico.
 
 Defaults MCP:
 
@@ -61,6 +62,8 @@ projectId  MCP_DEFAULT_PROJECT_ID, se o cliente nao enviar projectId
 
 Para LM Studio, use `providerId="lmstudio"` e faca um setup inicial com `mode="api_key"`.
 A API key e enviada ao middleware e salva criptografada; ela nao volta em `status` nem em `responses`.
+Os campos de autenticacao sempre ficam em `authFields`, usando os IDs publicados
+por `llm_providers`.
 
 Exemplo de setup LM Studio:
 
@@ -70,8 +73,10 @@ Exemplo de setup LM Studio:
   "projectId": "acme",
   "profileId": "default",
   "mode": "api_key",
-  "baseUrl": "http://127.0.0.1:1234",
-  "apiKey": "<api key do LM Studio>"
+  "authFields": {
+    "baseUrl": "http://127.0.0.1:1234",
+    "apiKey": "<secret>"
+  }
 }
 ```
 
@@ -161,7 +166,7 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"manual","version":"0.1.0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"llm_providers","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"llm_providers","arguments":{"projectId":"acme"}}}' \
   '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"llm_login_status","arguments":{"providerId":"openai","projectId":"acme","loginSessionId":"<loginSessionId>"}}}' \
   | MIDDLEWARE_BASE_URL='http://localhost:18787' \
     MIDDLEWARE_CLIENT_TOKEN="$MIDDLEWARE_CLIENT_TOKEN" \

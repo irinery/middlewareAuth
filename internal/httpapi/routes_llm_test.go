@@ -52,6 +52,12 @@ func TestLLMProvidersExposesCanonicalBlackBoxContract(t *testing.T) {
 	if !response.Providers[0].Capabilities.Refresh || response.Providers[1].Capabilities.Refresh {
 		t.Fatalf("refresh capabilities = %#v", response.Providers)
 	}
+	if !response.Providers[0].Capabilities.Intelligence || response.Providers[1].Capabilities.Intelligence {
+		t.Fatalf("intelligence capabilities = %#v", response.Providers)
+	}
+	if !response.Providers[0].Capabilities.Store || response.Providers[1].Capabilities.Store {
+		t.Fatalf("store capabilities = %#v", response.Providers)
+	}
 	if len(response.Providers[1].Auth.Fields) != 2 || !response.Providers[1].Auth.Fields[1].Secret {
 		t.Fatalf("auth fields = %#v", response.Providers[1].Auth.Fields)
 	}
@@ -213,6 +219,54 @@ func TestLLMResponsesNormalizesMissingCredentialAndUnknownProvider(t *testing.T)
 
 	assertError(`{"providerId":"openai","profileId":"default","model":"gpt-test","input":[{"role":"user","content":"oi"}]}`, "ERR_LLM_AUTH_REQUIRED", http.StatusUnauthorized)
 	assertError(`{"providerId":"unknown","profileId":"default","model":"x","input":[{"role":"user","content":"oi"}]}`, "ERR_LLM_PROVIDER_UNKNOWN", http.StatusBadRequest)
+}
+
+func TestLLMLoginStatusNormalizesSessionErrors(t *testing.T) {
+	handler := testHandler(t)
+	if err := handler.addSession(loginSession{
+		LoginSessionID: "expired-session",
+		ProjectID:      "pockettrace",
+		ProfileID:      "default",
+		Mode:           "device_code",
+		Status:         "expired",
+		ExpiresAt:      1,
+		Error:          security.NewError("ERR_LOGIN_SESSION_EXPIRED", "erro interno do fluxo", http.StatusGone),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/projects/pockettrace/llm/login-sessions/expired-session?providerId=openai&profileId=default", nil)
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response LLMLoginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "expired" || response.Error == nil || response.Error.Code != "ERR_LLM_AUTH_EXPIRED" {
+		t.Fatalf("response = %#v", response)
+	}
+	if stringsContainAny(rec.Body.String(), "ERR_LOGIN_SESSION_EXPIRED", "erro interno do fluxo") {
+		t.Fatalf("resposta vazou erro interno: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/projects/pockettrace/llm/login-sessions/missing?providerId=openai&profileId=default", nil)
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var errorResponse MiddlewareErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &errorResponse); err != nil {
+		t.Fatal(err)
+	}
+	if errorResponse.Error.Code != "ERR_LLM_REQUEST_INVALID" {
+		t.Fatalf("error = %#v", errorResponse.Error)
+	}
 }
 
 func stringsContainAny(value string, candidates ...string) bool {
