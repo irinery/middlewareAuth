@@ -82,6 +82,72 @@ func TestFileStoreSavesProviderAPIKeyWithoutPlaintext(t *testing.T) {
 	}
 }
 
+func TestFileStoreIsolatesProviderProjectAndProfileCredentials(t *testing.T) {
+	store := testStore(t)
+	type credentialCase struct {
+		provider  string
+		typeName  string
+		projectID string
+		profileID string
+		secret    string
+	}
+	cases := []credentialCase{
+		{provider: "lmstudio", typeName: "api_key", projectID: "projectA", profileID: "default", secret: "secret-lm-project-a-default"},
+		{provider: "lmstudio", typeName: "api_key", projectID: "projectA", profileID: "secondary", secret: "secret-lm-project-a-secondary"},
+		{provider: "lmstudio", typeName: "api_key", projectID: "projectB", profileID: "default", secret: "secret-lm-project-b-default"},
+		{provider: "openai", typeName: "oauth", projectID: "projectA", profileID: "default", secret: "secret-openai-project-a-default"},
+	}
+
+	for _, item := range cases {
+		_, err := store.SaveProviderCredential(context.Background(), item.provider, item.typeName, item.projectID, item.profileID, StoredOAuthCredential{
+			Access:    item.secret,
+			Refresh:   "refresh-" + item.secret,
+			Expires:   time.Now().Add(time.Hour).UnixMilli(),
+			AccountID: item.provider + ":" + item.projectID + ":" + item.profileID,
+			BaseURL:   "http://127.0.0.1:1234",
+		})
+		if err != nil {
+			t.Fatalf("save %s/%s/%s: %v", item.provider, item.projectID, item.profileID, err)
+		}
+	}
+
+	for _, item := range cases {
+		loaded, err := store.LoadProviderCredential(context.Background(), item.provider, item.projectID, item.profileID)
+		if err != nil {
+			t.Fatalf("load %s/%s/%s: %v", item.provider, item.projectID, item.profileID, err)
+		}
+		if loaded.Access != item.secret || loaded.Provider != item.provider {
+			t.Fatalf("credential crossed isolation boundary for %s/%s/%s: %#v", item.provider, item.projectID, item.profileID, loaded)
+		}
+	}
+
+	missing := []struct {
+		provider  string
+		projectID string
+		profileID string
+	}{
+		{provider: "lmstudio", projectID: "projectC", profileID: "default"},
+		{provider: "lmstudio", projectID: "projectA", profileID: "missing"},
+		{provider: "openai", projectID: "projectB", profileID: "default"},
+	}
+	for _, item := range missing {
+		_, err := store.LoadProviderCredential(context.Background(), item.provider, item.projectID, item.profileID)
+		if security.Code(err) != "ERR_AUTH_PROFILE_NOT_FOUND" {
+			t.Fatalf("unexpected cross-boundary lookup %s/%s/%s: %v", item.provider, item.projectID, item.profileID, err)
+		}
+	}
+
+	raw, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range cases {
+		if strings.Contains(string(raw), item.secret) {
+			t.Fatalf("store leaked plaintext for %s/%s/%s", item.provider, item.projectID, item.profileID)
+		}
+	}
+}
+
 func TestFileStoreCorruptedStoreFailsClosed(t *testing.T) {
 	store := testStore(t)
 	if err := os.WriteFile(store.path, []byte("{broken"), 0o600); err != nil {

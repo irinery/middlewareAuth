@@ -157,11 +157,94 @@ isolated_status=$(api_get "$MIDDLEWARE_BASE_URL/v1/projects/$E2E_OTHER_PROJECT_I
 printf '%s' "$isolated_status" | jq -e --arg project "$E2E_OTHER_PROJECT_ID" \
 	'.authenticated == false and .projectId == $project and (.accountId | not)' >/dev/null
 
+isolated_profile_status=$(api_get "$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/status?providerId=lmstudio&profileId=isolated-profile")
+printf '%s' "$isolated_profile_status" | jq -e --arg project "$E2E_PROJECT_ID" \
+	'.authenticated == false and .projectId == $project and .profileId == "isolated-profile" and (.accountId | not)' >/dev/null
+
+unauthorized_body="$tmp_dir/unauthorized.json"
+unauthorized_status=$(curl --silent --show-error --max-time 15 \
+	-o "$unauthorized_body" -w '%{http_code}' \
+	-H 'Accept: application/json' \
+	"$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/providers")
+if [ "$unauthorized_status" != 401 ]; then
+	printf '%s\n' "ERRO: request sem token retornou HTTP $unauthorized_status" >&2
+	exit 1
+fi
+jq -e '.error.code == "ERR_MIDDLEWARE_UNAUTHORIZED"' "$unauthorized_body" >/dev/null
+
+unknown_provider_body="$tmp_dir/unknown-provider.json"
+unknown_provider_status=$(curl --silent --show-error --max-time 15 \
+	-o "$unknown_provider_body" -w '%{http_code}' \
+	-H "Authorization: Bearer $middleware_client_token" \
+	-H 'Accept: application/json' \
+	"$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/status?providerId=unknown&profileId=$E2E_PROFILE_ID")
+if [ "$unknown_provider_status" != 400 ]; then
+	printf '%s\n' "ERRO: provider desconhecido retornou HTTP $unknown_provider_status" >&2
+	exit 1
+fi
+jq -e '.error.code == "ERR_LLM_PROVIDER_UNKNOWN"' "$unknown_provider_body" >/dev/null
+
+missing_session_body="$tmp_dir/missing-session.json"
+missing_session_status=$(curl --silent --show-error --max-time 15 \
+	-o "$missing_session_body" -w '%{http_code}' \
+	-H "Authorization: Bearer $middleware_client_token" \
+	-H 'Accept: application/json' \
+	"$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/login-sessions/missing?providerId=openai&profileId=$E2E_PROFILE_ID")
+if [ "$missing_session_status" != 404 ]; then
+	printf '%s\n' "ERRO: sessao inexistente retornou HTTP $missing_session_status" >&2
+	exit 1
+fi
+jq -e '.error.code == "ERR_LLM_REQUEST_INVALID"' "$missing_session_body" >/dev/null
+
+refresh_body="$tmp_dir/refresh-unsupported.json"
+refresh_status=$(jq -cn --arg profile "$E2E_PROFILE_ID" '{providerId:"lmstudio",profileId:$profile}' | \
+	curl --silent --show-error --max-time 15 \
+		-o "$refresh_body" -w '%{http_code}' \
+		-H "Authorization: Bearer $middleware_client_token" \
+		-H 'Accept: application/json' \
+		-H 'Content-Type: application/json' \
+		--data-binary @- \
+		"$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/refresh")
+if [ "$refresh_status" != 400 ]; then
+	printf '%s\n' "ERRO: refresh nao suportado retornou HTTP $refresh_status" >&2
+	exit 1
+fi
+jq -e '.error.code == "ERR_LLM_REFRESH_UNSUPPORTED"' "$refresh_body" >/dev/null
+
 response_payload=$(jq -cn --arg model "$LMSTUDIO_MODEL" --arg profile "$E2E_PROFILE_ID" \
 	'{providerId:"lmstudio",profileId:$profile,model:$model,instructions:"Responda de forma objetiva.",input:[{role:"user",content:"Responda apenas E2E_OK"}],stream:false,store:false}')
 response=$(printf '%s' "$response_payload" | api_post "$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/responses")
 printf '%s' "$response" | jq -e \
 	'.outputText | type == "string" and length > 0' >/dev/null
+
+invalid_provider_key="sk-$(random_hex)"
+invalid_login_body="$tmp_dir/invalid-provider-auth.json"
+invalid_login_status=$(jq -cn \
+	--arg baseUrl "$LMSTUDIO_BASE_URL" \
+	--arg apiKey "$invalid_provider_key" \
+	'{providerId:"lmstudio",profileId:"invalid-auth",mode:"api_key",authFields:{baseUrl:$baseUrl,apiKey:$apiKey}}' | \
+	curl --silent --show-error --max-time 30 \
+		-o "$invalid_login_body" -w '%{http_code}' \
+		-H "Authorization: Bearer $middleware_client_token" \
+		-H 'Accept: application/json' \
+		-H 'Content-Type: application/json' \
+		--data-binary @- \
+		"$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/login")
+if [ "$invalid_login_status" != 401 ]; then
+	printf '%s\n' "ERRO: credencial invalida do provider retornou HTTP $invalid_login_status" >&2
+	exit 1
+fi
+jq -e '.error.code == "ERR_LLM_AUTH_EXPIRED"' "$invalid_login_body" >/dev/null
+if grep -F "$invalid_provider_key" "$invalid_login_body" >/dev/null 2>&1; then
+	printf '%s\n' 'ERRO: erro HTTP devolveu a credencial invalida do provider' >&2
+	exit 1
+fi
+
+curl --fail --silent --show-error --max-time 15 "$MIDDLEWARE_BASE_URL/healthz" >/dev/null
+catalog_after_failure=$(api_get "$MIDDLEWARE_BASE_URL/v1/projects/$E2E_OTHER_PROJECT_ID/llm/providers")
+printf '%s' "$catalog_after_failure" | jq -e '.contractVersion == "middlewareauth.llm.v1" and (.providers | length >= 2)' >/dev/null
+response_after_failure=$(printf '%s' "$response_payload" | api_post "$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/llm/responses")
+printf '%s' "$response_after_failure" | jq -e '.outputText | type == "string" and length > 0' >/dev/null
 
 legacy_status=$(api_get "$MIDDLEWARE_BASE_URL/v1/projects/$E2E_PROJECT_ID/auth/lmstudio/status?profileId=$E2E_PROFILE_ID")
 printf '%s' "$legacy_status" | jq -e '.authenticated == true and .providerId == "lmstudio"' >/dev/null
@@ -223,6 +306,14 @@ if grep -R -F "$LMSTUDIO_API_KEY" "$state_dir" >/dev/null 2>&1; then
 	printf '%s\n' 'ERRO: API key foi persistida em texto claro' >&2
 	exit 1
 fi
+if grep -F "$LMSTUDIO_API_KEY" "$tmp_dir/server.stdout" "$tmp_dir/server.stderr" "$tmp_dir/mcp.stderr" >/dev/null 2>&1; then
+	printf '%s\n' 'ERRO: API key real apareceu nos logs' >&2
+	exit 1
+fi
+if grep -F "$invalid_provider_key" "$tmp_dir/server.stdout" "$tmp_dir/server.stderr" "$tmp_dir/mcp.stderr" >/dev/null 2>&1; then
+	printf '%s\n' 'ERRO: credencial invalida apareceu nos logs' >&2
+	exit 1
+fi
 
 finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 jq -n \
@@ -231,4 +322,4 @@ jq -n \
 	--arg provider lmstudio \
 	--arg model "$LMSTUDIO_MODEL" \
 	--arg projectId "$E2E_PROJECT_ID" \
-	'{suite:$suite,status:"passed",finishedAt:$finishedAt,provider:$provider,model:$model,projectId:$projectId,checks:["provider-real-authenticated","http-canonical-catalog","http-login","http-login-status","http-status","http-project-isolation","http-responses","http-legacy-compatibility","mcp-protocol","mcp-canonical-catalog","mcp-login","mcp-login-status","mcp-status","mcp-responses","credential-redaction","encrypted-at-rest"]}'
+	'{suite:$suite,status:"passed",finishedAt:$finishedAt,provider:$provider,model:$model,projectId:$projectId,checks:["provider-real-authenticated","http-canonical-catalog","http-login","http-login-status","http-status","http-project-isolation","http-profile-isolation","middleware-authorization-401","unknown-provider-400","login-session-404","refresh-unsupported-400","http-responses","provider-auth-401","provider-failure-non-blocking","http-legacy-compatibility","mcp-protocol","mcp-canonical-catalog","mcp-login","mcp-login-status","mcp-status","mcp-responses","credential-redaction","encrypted-at-rest","server-log-redaction"]}'

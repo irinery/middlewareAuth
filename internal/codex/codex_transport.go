@@ -112,15 +112,23 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		delay := retryDelay(resp, 1000)
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return nil, true, delay, security.Wrap("ERR_CODEX_RATE_LIMITED", "Codex rate limited: "+security.Redact(string(rawBody)), http.StatusTooManyRequests, nil)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return nil, false, 0, security.NewError("ERR_CODEX_AUTH_REJECTED", "Codex recusou autenticacao", http.StatusUnauthorized)
+		case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+			return nil, true, delay, security.NewError("ERR_CODEX_TIMEOUT", "timeout ao chamar Codex", http.StatusGatewayTimeout)
+		case http.StatusTooManyRequests:
+			return nil, true, delay, security.NewError("ERR_CODEX_RATE_LIMITED", "Codex aplicou rate limit", http.StatusTooManyRequests)
+		case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+			return nil, true, delay, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex indisponivel", http.StatusBadGateway)
+		default:
+			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+				return nil, false, 0, security.NewError("ERR_CODEX_REQUEST_INVALID", "Codex recusou o request", http.StatusBadRequest)
+			}
+			return nil, false, 0, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex retornou status inesperado", http.StatusBadGateway)
 		}
-		if resp.StatusCode == 500 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
-			return nil, true, delay, security.Wrap("ERR_CODEX_HTTP_FAILED", "Codex indisponivel: "+security.Redact(string(rawBody)), http.StatusBadGateway, nil)
-		}
-		return nil, false, 0, security.Wrap("ERR_CODEX_HTTP_FAILED", "Codex retornou erro: "+security.Redact(string(rawBody)), http.StatusBadGateway, nil)
 	}
 	return parseResponse(resp)
 }

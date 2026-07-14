@@ -843,10 +843,13 @@ func (s *Server) llmErrorFromError(err error, providerID, projectID, profileID s
 		publicMessage = "login necessario"
 	case strings.Contains(message, "ERR_TOKEN_REFRESH_FAILED") ||
 		strings.Contains(message, "ERR_ACCOUNT_ID_CHANGED") ||
+		strings.Contains(message, "ERR_CODEX_AUTH_REJECTED") ||
+		strings.Contains(message, "ERR_LMSTUDIO_AUTH_REJECTED") ||
 		strings.Contains(message, "HTTP 401"):
 		code = "ERR_LLM_AUTH_EXPIRED"
 		publicMessage = "credencial expirada ou invalida"
 	case strings.Contains(message, "ERR_CODEX_RATE_LIMITED") ||
+		strings.Contains(message, "ERR_LMSTUDIO_RATE_LIMITED") ||
 		strings.Contains(message, "HTTP 429"):
 		code = "ERR_LLM_RATE_LIMITED"
 		publicMessage = "rate limit do provider"
@@ -859,7 +862,9 @@ func (s *Server) llmErrorFromError(err error, providerID, projectID, profileID s
 		publicMessage = "request LLM invalido"
 	case strings.Contains(message, "ERR_CODEX_STREAM_INVALID") ||
 		strings.Contains(message, "ERR_CODEX_HTTP_FAILED") ||
+		strings.Contains(message, "ERR_CODEX_TIMEOUT") ||
 		strings.Contains(message, "ERR_LMSTUDIO_HTTP_FAILED") ||
+		strings.Contains(message, "ERR_LMSTUDIO_TIMEOUT") ||
 		strings.Contains(message, "ERR_LMSTUDIO_RESPONSE_INVALID") ||
 		strings.Contains(message, "HTTP 502") ||
 		strings.Contains(message, "HTTP 503") ||

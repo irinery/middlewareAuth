@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/irinery/middlewareAuth/internal/auth"
 	"github.com/irinery/middlewareAuth/internal/config"
+	"github.com/irinery/middlewareAuth/internal/security"
 )
 
 func TestBuildCodexHeadersProtectsAuthorization(t *testing.T) {
@@ -155,5 +157,49 @@ func TestTransportForwardsIntelligenceReasoningAndExtra(t *testing.T) {
 	}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: 1})
 	if err != nil {
 		t.Fatalf("SendCodexResponse() error = %v", err)
+	}
+}
+
+func TestTransportMapsProviderStatusWithoutLeakingBody(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		status     int
+		wantCode   string
+		wantStatus int
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, wantCode: "ERR_CODEX_AUTH_REJECTED", wantStatus: http.StatusUnauthorized},
+		{name: "bad-request", status: http.StatusBadRequest, wantCode: "ERR_CODEX_REQUEST_INVALID", wantStatus: http.StatusBadRequest},
+		{name: "rate-limit", status: http.StatusTooManyRequests, wantCode: "ERR_CODEX_RATE_LIMITED", wantStatus: http.StatusTooManyRequests},
+		{name: "server-error", status: http.StatusInternalServerError, wantCode: "ERR_CODEX_HTTP_FAILED", wantStatus: http.StatusBadGateway},
+		{name: "gateway-timeout", status: http.StatusGatewayTimeout, wantCode: "ERR_CODEX_TIMEOUT", wantStatus: http.StatusGatewayTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const canary = "provider-body-refresh-token-canary"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(`{"refresh_token":"` + canary + `"}`))
+			}))
+			defer server.Close()
+
+			transport := NewTransport(config.CodexConfig{
+				BaseURL:          server.URL,
+				ResponsesPath:    "/codex/responses",
+				RequestTimeoutMs: 5000,
+				MaxRetries:       0,
+			}, server.Client())
+			_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{
+				Access:    "access",
+				AccountID: "account-1",
+			}, CodexResponseRequest{
+				Model: "gpt-test",
+				Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+			}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: -1})
+			if security.Code(err) != test.wantCode || security.StatusCode(err) != test.wantStatus {
+				t.Fatalf("error=%v code=%s status=%d", err, security.Code(err), security.StatusCode(err))
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Fatalf("erro vazou corpo do provider: %v", err)
+			}
+		})
 	}
 }

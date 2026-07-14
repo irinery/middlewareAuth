@@ -459,12 +459,18 @@ func normalizeLLMError(err error) error {
 		return err
 	case "ERR_AUTH_PROFILE_NOT_FOUND", "ERR_CODEX_ACCOUNT_ID_MISSING":
 		return security.NewError("ERR_LLM_AUTH_REQUIRED", "autenticacao do provider necessaria", http.StatusUnauthorized)
+	case "ERR_CODEX_AUTH_REJECTED", "ERR_LMSTUDIO_AUTH_REJECTED":
+		return security.NewError("ERR_LLM_AUTH_EXPIRED", "credencial do provider expirada ou invalida", http.StatusUnauthorized)
 	case "ERR_LOGIN_SESSION_EXPIRED":
 		return security.NewError("ERR_LLM_AUTH_EXPIRED", "sessao de autenticacao expirada", http.StatusUnauthorized)
 	case "ERR_LOGIN_SESSION_NOT_FOUND":
 		return security.NewError("ERR_LLM_REQUEST_INVALID", "sessao de autenticacao nao encontrada", http.StatusNotFound)
-	case "ERR_CODEX_RATE_LIMITED":
+	case "ERR_CODEX_RATE_LIMITED", "ERR_LMSTUDIO_RATE_LIMITED":
 		return security.NewError("ERR_LLM_RATE_LIMITED", "provider aplicou rate limit", http.StatusTooManyRequests)
+	case "ERR_CODEX_TIMEOUT", "ERR_LMSTUDIO_TIMEOUT":
+		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "timeout ao chamar provider LLM", http.StatusGatewayTimeout)
+	case "ERR_CONTEXT_CANCELLED":
+		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "request LLM cancelado", http.StatusRequestTimeout)
 	case "ERR_INVALID_JSON", "ERR_PAYLOAD_TOO_LARGE", "ERR_INVALID_PROFILE_ID", "ERR_INVALID_PROVIDER_ID",
 		"ERR_CODEX_REQUEST_INVALID", "ERR_LMSTUDIO_REQUEST_INVALID", "ERR_LMSTUDIO_BASE_URL_INVALID", "ERR_LMSTUDIO_API_KEY_REQUIRED":
 		return security.NewError("ERR_LLM_REQUEST_INVALID", security.Public(err).Message, security.StatusCode(err))
