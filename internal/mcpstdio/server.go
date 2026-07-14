@@ -224,57 +224,15 @@ func (s *Server) middlewareHealth(ctx context.Context) (string, bool) {
 }
 
 func (s *Server) llmProviders(ctx context.Context, args map[string]any) (string, bool) {
-	_ = ctx
-	_ = args
-	return marshalText(map[string]any{
-		"providers": []map[string]any{
-			{
-				"id":    "openai",
-				"title": "OpenAI",
-				"auth": map[string]any{
-					"required":    true,
-					"modes":       []string{"oauth", "device_code"},
-					"defaultMode": "device_code",
-				},
-				"defaults": map[string]any{
-					"profileId": s.profileIDForProvider(nil, "openai"),
-					"model":     s.modelForProvider(nil, "openai"),
-				},
-				"models": []map[string]string{
-					{"id": "gpt-5.5", "title": "gpt-5.5"},
-					{"id": "gpt-5", "title": "gpt-5"},
-				},
-				"capabilities": map[string]any{
-					"stream":             true,
-					"reasoningEffort":    true,
-					"systemInstructions": true,
-					"tools":              false,
-				},
-			},
-			{
-				"id":    "lmstudio",
-				"title": "LM Studio",
-				"auth": map[string]any{
-					"required":    true,
-					"modes":       []string{"api_key"},
-					"defaultMode": "api_key",
-				},
-				"defaults": map[string]any{
-					"profileId": s.profileIDForProvider(nil, "lmstudio"),
-					"model":     s.modelForProvider(nil, "lmstudio"),
-				},
-				"models": []map[string]string{
-					{"id": s.modelForProvider(nil, "lmstudio"), "title": s.modelForProvider(nil, "lmstudio")},
-				},
-				"capabilities": map[string]any{
-					"stream":             true,
-					"reasoningEffort":    false,
-					"systemInstructions": true,
-					"tools":              false,
-				},
-			},
-		},
-	}), false
+	projectID, ok := s.projectID(args)
+	if !ok {
+		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", "", "", ""), true
+	}
+	var response any
+	if err := s.doJSON(ctx, http.MethodGet, "/v1/projects/"+url.PathEscape(projectID)+"/llm/providers", nil, &response, true); err != nil {
+		return s.llmErrorFromError(err, "", projectID, ""), true
+	}
+	return marshalText(response), false
 }
 
 func (s *Server) openaiLoginStart(ctx context.Context, args map[string]any) (string, bool) {
@@ -287,27 +245,39 @@ func (s *Server) openaiLoginStart(ctx context.Context, args map[string]any) (str
 
 func (s *Server) llmLoginStart(ctx context.Context, args map[string]any) (string, bool) {
 	providerID := s.providerID(args)
-	if !s.providerSupported(providerID) {
-		return s.llmErrorText("ERR_LLM_PROVIDER_UNKNOWN", "provider LLM desconhecido", providerID, stringArg(args, "projectId", ""), stringArg(args, "profileId", "")), true
-	}
-	if providerID == "lmstudio" {
-		return s.lmStudioLoginStart(ctx, args)
-	}
 	projectID, ok := s.projectID(args)
 	if !ok {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", providerID, "", s.profileIDForProvider(args, providerID)), true
 	}
-	openArgs := cloneArgs(args)
-	openArgs["projectId"] = projectID
-	openArgs["profileId"] = s.profileIDForProvider(args, providerID)
-	if stringArg(openArgs, "mode", "") == "" {
-		openArgs["mode"] = "device_code"
+	profileID := s.profileIDForProvider(args, providerID)
+	mode := stringArg(args, "mode", "")
+	if mode == "" {
+		if providerID == "lmstudio" {
+			mode = "api_key"
+		} else {
+			mode = "device_code"
+		}
 	}
-	response, err := s.openaiLoginStartValue(ctx, openArgs)
-	if err != nil {
-		return s.llmErrorFromError(err, providerID, projectID, stringArg(openArgs, "profileId", "")), true
+	body := map[string]any{
+		"providerId": providerID,
+		"profileId":  profileID,
+		"mode":       mode,
 	}
-	return marshalText(llmLoginStartResponse(response)), false
+	authFields := objectArg(args, "authFields")
+	if len(authFields) == 0 && providerID == "lmstudio" {
+		authFields = map[string]any{
+			"baseUrl": stringArg(args, "baseUrl", s.lmStudioBaseURL),
+			"apiKey":  stringArg(args, "apiKey", s.lmStudioAPIKey),
+		}
+	}
+	if len(authFields) > 0 {
+		body["authFields"] = authFields
+	}
+	var response any
+	if err := s.doJSON(ctx, http.MethodPost, "/v1/projects/"+url.PathEscape(projectID)+"/llm/login", body, &response, true); err != nil {
+		return s.llmErrorFromError(err, providerID, projectID, profileID), true
+	}
+	return marshalText(response), false
 }
 
 func (s *Server) openaiLoginStartValue(ctx context.Context, args map[string]any) (any, error) {
@@ -336,25 +306,17 @@ func (s *Server) openaiStatus(ctx context.Context, args map[string]any) (string,
 
 func (s *Server) llmStatus(ctx context.Context, args map[string]any) (string, bool) {
 	providerID := s.providerID(args)
-	if !s.providerSupported(providerID) {
-		return s.llmErrorText("ERR_LLM_PROVIDER_UNKNOWN", "provider LLM desconhecido", providerID, stringArg(args, "projectId", ""), stringArg(args, "profileId", "")), true
-	}
-	if providerID == "lmstudio" {
-		return s.lmStudioStatus(ctx, args)
-	}
 	projectID, ok := s.projectID(args)
 	if !ok {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", providerID, "", s.profileIDForProvider(args, providerID)), true
 	}
 	profileID := s.profileIDForProvider(args, providerID)
-	openArgs := cloneArgs(args)
-	openArgs["projectId"] = projectID
-	openArgs["profileId"] = profileID
-	response, err := s.openaiStatusValue(ctx, openArgs)
-	if err != nil {
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/llm/status?providerId=" + url.QueryEscape(providerID) + "&profileId=" + url.QueryEscape(profileID)
+	var response any
+	if err := s.doJSON(ctx, http.MethodGet, path, nil, &response, true); err != nil {
 		return s.llmErrorFromError(err, providerID, projectID, profileID), true
 	}
-	return marshalText(llmStatusResponse(providerID, projectID, profileID, response)), false
+	return marshalText(response), false
 }
 
 func (s *Server) openaiStatusValue(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -380,9 +342,6 @@ func (s *Server) openaiLoginStatus(ctx context.Context, args map[string]any) (st
 
 func (s *Server) llmLoginStatus(ctx context.Context, args map[string]any) (string, bool) {
 	providerID := s.providerID(args)
-	if !s.providerSupported(providerID) {
-		return s.llmErrorText("ERR_LLM_PROVIDER_UNKNOWN", "provider LLM desconhecido", providerID, stringArg(args, "projectId", ""), stringArg(args, "profileId", "")), true
-	}
 	projectID, ok := s.projectID(args)
 	if !ok {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", providerID, "", s.profileIDForProvider(args, providerID)), true
@@ -391,15 +350,13 @@ func (s *Server) llmLoginStatus(ctx context.Context, args map[string]any) (strin
 	if sessionID == "" {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "loginSessionId obrigatorio", providerID, projectID, s.profileIDForProvider(args, providerID)), true
 	}
-	response, err := s.openaiLoginStatusValue(ctx, args)
 	profileID := s.profileIDForProvider(args, providerID)
-	if value := stringFromMap(response, "profileId"); value != "" {
-		profileID = value
-	}
-	if err != nil {
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/llm/login-sessions/" + url.PathEscape(sessionID) + "?providerId=" + url.QueryEscape(providerID) + "&profileId=" + url.QueryEscape(profileID)
+	var response any
+	if err := s.doJSON(ctx, http.MethodGet, path, nil, &response, true); err != nil {
 		return s.llmErrorFromError(err, providerID, projectID, profileID), true
 	}
-	return marshalText(llmLoginStatusResponse(providerID, projectID, profileID, response)), false
+	return marshalText(response), false
 }
 
 func (s *Server) openaiLoginStatusValue(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -429,26 +386,17 @@ func (s *Server) openaiRefresh(ctx context.Context, args map[string]any) (string
 
 func (s *Server) llmRefresh(ctx context.Context, args map[string]any) (string, bool) {
 	providerID := s.providerID(args)
-	if !s.providerSupported(providerID) {
-		return s.llmErrorText("ERR_LLM_PROVIDER_UNKNOWN", "provider LLM desconhecido", providerID, stringArg(args, "projectId", ""), stringArg(args, "profileId", "")), true
-	}
-	if providerID == "lmstudio" {
-		projectID, _ := s.projectID(args)
-		return s.llmErrorText("ERR_LLM_REFRESH_UNSUPPORTED", "LM Studio usa API key e nao suporta refresh", providerID, projectID, s.profileIDForProvider(args, providerID)), true
-	}
 	projectID, ok := s.projectID(args)
 	if !ok {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", providerID, "", s.profileIDForProvider(args, providerID)), true
 	}
 	profileID := s.profileIDForProvider(args, providerID)
-	openArgs := cloneArgs(args)
-	openArgs["projectId"] = projectID
-	openArgs["profileId"] = profileID
-	response, err := s.openaiRefreshValue(ctx, openArgs)
-	if err != nil {
+	body := map[string]any{"providerId": providerID, "profileId": profileID}
+	var response any
+	if err := s.doJSON(ctx, http.MethodPost, "/v1/projects/"+url.PathEscape(projectID)+"/llm/refresh", body, &response, true); err != nil {
 		return s.llmErrorFromError(err, providerID, projectID, profileID), true
 	}
-	return marshalText(llmStatusResponse(providerID, projectID, profileID, response)), false
+	return marshalText(response), false
 }
 
 func (s *Server) openaiRefreshValue(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -474,26 +422,40 @@ func (s *Server) codexResponses(ctx context.Context, args map[string]any) (strin
 
 func (s *Server) llmResponses(ctx context.Context, args map[string]any) (string, bool) {
 	providerID := s.providerID(args)
-	if !s.providerSupported(providerID) {
-		return s.llmErrorText("ERR_LLM_PROVIDER_UNKNOWN", "provider LLM desconhecido", providerID, stringArg(args, "projectId", ""), stringArg(args, "profileId", "")), true
-	}
-	if providerID == "lmstudio" {
-		return s.lmStudioResponses(ctx, args)
-	}
 	projectID, ok := s.projectID(args)
 	if !ok {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", providerID, "", s.profileIDForProvider(args, providerID)), true
 	}
 	profileID := s.profileIDForProvider(args, providerID)
-	openArgs := cloneArgs(args)
-	openArgs["projectId"] = projectID
-	openArgs["profileId"] = profileID
-	openArgs["model"] = s.modelForProvider(args, providerID)
-	response, err := s.codexResponsesValue(ctx, openArgs)
+	input, err := parseInput(args["input"])
 	if err != nil {
-		if strings.Contains(err.Error(), "input") {
-			return s.llmErrorText("ERR_LLM_REQUEST_INVALID", err.Error(), providerID, projectID, profileID), true
+		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", err.Error(), providerID, projectID, profileID), true
+	}
+	body := map[string]any{
+		"providerId":   providerID,
+		"profileId":    profileID,
+		"model":        s.modelForProvider(args, providerID),
+		"instructions": stringArg(args, "instructions", ""),
+		"input":        input,
+		"stream":       boolArg(args, "stream", true),
+		"store":        boolArg(args, "store", false),
+	}
+	if intelligence := stringArg(args, "intelligence", ""); intelligence != "" {
+		body["intelligence"] = normalizeIntelligence(intelligence)
+	}
+	if reasoning := reasoningArg(args); len(reasoning) > 0 {
+		body["reasoning"] = reasoning
+	}
+	if extra := objectArg(args, "extra"); len(extra) > 0 {
+		for key, value := range extra {
+			if _, exists := body[key]; exists {
+				continue
+			}
+			body[key] = value
 		}
+	}
+	var response any
+	if err := s.doJSON(ctx, http.MethodPost, "/v1/projects/"+url.PathEscape(projectID)+"/llm/responses", body, &response, true); err != nil {
 		return s.llmErrorFromError(err, providerID, projectID, profileID), true
 	}
 	return marshalText(response), false
@@ -665,10 +627,6 @@ func (s *Server) providerID(args map[string]any) string {
 		providerID = "openai"
 	}
 	return normalizeProviderID(providerID)
-}
-
-func (s *Server) providerSupported(providerID string) bool {
-	return providerID == "openai" || providerID == "lmstudio"
 }
 
 func (s *Server) profileIDForProvider(args map[string]any, providerID string) string {
@@ -856,6 +814,27 @@ func (s *Server) llmErrorFromError(err error, providerID, projectID, profileID s
 	code := "ERR_LLM_INTERNAL"
 	publicMessage := "erro interno"
 	switch {
+	case strings.Contains(message, "ERR_LLM_PROVIDER_UNKNOWN"):
+		code = "ERR_LLM_PROVIDER_UNKNOWN"
+		publicMessage = "provider LLM desconhecido"
+	case strings.Contains(message, "ERR_LLM_REFRESH_UNSUPPORTED"):
+		code = "ERR_LLM_REFRESH_UNSUPPORTED"
+		publicMessage = "provider nao suporta refresh"
+	case strings.Contains(message, "ERR_LLM_AUTH_REQUIRED"):
+		code = "ERR_LLM_AUTH_REQUIRED"
+		publicMessage = "login necessario"
+	case strings.Contains(message, "ERR_LLM_AUTH_EXPIRED"):
+		code = "ERR_LLM_AUTH_EXPIRED"
+		publicMessage = "credencial expirada ou invalida"
+	case strings.Contains(message, "ERR_LLM_RATE_LIMITED"):
+		code = "ERR_LLM_RATE_LIMITED"
+		publicMessage = "rate limit do provider"
+	case strings.Contains(message, "ERR_LLM_REQUEST_INVALID"):
+		code = "ERR_LLM_REQUEST_INVALID"
+		publicMessage = "request LLM invalido"
+	case strings.Contains(message, "ERR_LLM_PROVIDER_UNAVAILABLE"):
+		code = "ERR_LLM_PROVIDER_UNAVAILABLE"
+		publicMessage = "provider indisponivel"
 	case strings.Contains(message, "MIDDLEWARE_CLIENT_TOKEN") ||
 		strings.Contains(message, "ERR_MIDDLEWARE_UNAUTHORIZED") ||
 		strings.Contains(message, "ERR_AUTH_PROFILE_NOT_FOUND") ||
@@ -971,7 +950,9 @@ func toolDefinitions() []map[string]any {
 			"name":        "llm_providers",
 			"title":       "LLM Providers",
 			"description": "Lista providers LLM suportados e capacidades.",
-			"inputSchema": objectSchema(nil, nil),
+			"inputSchema": objectSchema(map[string]any{
+				"projectId": map[string]any{"type": "string"},
+			}, []string{"projectId"}),
 		},
 		{
 			"name":        "llm_login_start",
@@ -981,9 +962,8 @@ func toolDefinitions() []map[string]any {
 				"providerId": map[string]any{"type": "string", "default": "openai"},
 				"projectId":  map[string]any{"type": "string"},
 				"profileId":  map[string]any{"type": "string", "default": "default"},
-				"mode":       map[string]any{"type": "string", "enum": []string{"oauth", "device_code", "api_key"}, "default": "device_code"},
-				"baseUrl":    map[string]any{"type": "string", "description": "Base URL do provider api_key. Para LM Studio: http://host:1234."},
-				"apiKey":     map[string]any{"type": "string", "description": "API key enviada apenas ao middleware para persistencia criptografada."},
+				"mode":       map[string]any{"type": "string", "description": "Modo retornado por llm_providers.auth.modes."},
+				"authFields": map[string]any{"type": "object", "description": "Valores dos campos retornados por llm_providers.auth.fields.", "additionalProperties": true},
 			}, []string{"providerId", "projectId", "profileId"}),
 		},
 		{
