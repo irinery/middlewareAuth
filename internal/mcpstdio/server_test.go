@@ -159,8 +159,25 @@ func TestToolCallCodexResponsesPassesModelControls(t *testing.T) {
 }
 
 func TestLLMProvidersListsOpenAI(t *testing.T) {
-	server := New(Options{})
-	text, isErr := server.callTool(context.Background(), "llm_providers", map[string]any{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/projects/acme/llm/providers" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+mcpTestToken {
+			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{
+			"contractVersion":"middlewareauth.llm.v1",
+			"providers":[
+				{"id":"openai","defaults":{"profileId":"default","model":"gpt-5.5"}},
+				{"id":"lmstudio","auth":{"defaultMode":"api_key"}}
+			]
+		}`))
+	}))
+	defer httpServer.Close()
+
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
+	text, isErr := server.callTool(context.Background(), "llm_providers", map[string]any{"projectId": "acme"})
 	if isErr {
 		t.Fatalf("llm_providers error: %s", text)
 	}
@@ -198,13 +215,13 @@ func findProvider(t *testing.T, providers []any, id string) map[string]any {
 
 func TestLLMStatusMapsOpenAIResponse(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/projects/acme/auth/openai/status" {
+		if r.URL.Path != "/v1/projects/acme/llm/status" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("profileId") != "default" {
-			t.Fatalf("profileId = %q", r.URL.Query().Get("profileId"))
+		if r.URL.Query().Get("providerId") != "openai" || r.URL.Query().Get("profileId") != "default" {
+			t.Fatalf("query = %q", r.URL.RawQuery)
 		}
-		_, _ = w.Write([]byte(`{"authenticated":true,"projectId":"acme","profileId":"default","accountId":"acc-1","email":"user@example.com","chatgptPlanType":"plus","expires":1780000000}`))
+		_, _ = w.Write([]byte(`{"authenticated":true,"providerId":"openai","projectId":"acme","profileId":"default","accountId":"acc-1","email":"user@example.com","planType":"plus","expires":1780000000000}`))
 	}))
 	defer httpServer.Close()
 
@@ -226,9 +243,9 @@ func TestLLMStatusMapsOpenAIResponse(t *testing.T) {
 	}
 }
 
-func TestLLMLoginStartUsesDeviceCodeDefaultAndSeconds(t *testing.T) {
+func TestLLMLoginStartUsesGenericDeviceCodeContract(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/projects/acme/auth/openai/login" {
+		if r.URL.Path != "/v1/projects/acme/llm/login" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		var body map[string]any
@@ -238,7 +255,7 @@ func TestLLMLoginStartUsesDeviceCodeDefaultAndSeconds(t *testing.T) {
 		if body["profileId"] != "default" || body["mode"] != "device_code" {
 			t.Fatalf("body = %#v", body)
 		}
-		_, _ = w.Write([]byte(`{"loginSessionId":"session-1","verificationUrl":"https://auth.example/device","userCode":"ABCD","expiresAt":1780000000000}`))
+		_, _ = w.Write([]byte(`{"providerId":"openai","projectId":"acme","profileId":"default","loginSessionId":"session-1","mode":"device_code","status":"pending","authenticated":false,"verificationUrl":"https://auth.example/device","userCode":"ABCD","expiresAt":1780000000000}`))
 	}))
 	defer httpServer.Close()
 
@@ -255,17 +272,20 @@ func TestLLMLoginStartUsesDeviceCodeDefaultAndSeconds(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response["expiresAt"] != float64(1780000000) {
+	if response["expiresAt"] != float64(1780000000000) || response["providerId"] != "openai" {
 		t.Fatalf("response = %#v", response)
 	}
 }
 
 func TestLLMLoginStatusMapsCompletedToAuthenticated(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/projects/acme/auth/openai/login-sessions/session-1" {
+		if r.URL.Path != "/v1/projects/acme/llm/login-sessions/session-1" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"loginSessionId":"session-1","projectId":"acme","profileId":"default","mode":"device_code","status":"completed","expiresAt":123,"completedAt":122}`))
+		if r.URL.Query().Get("providerId") != "openai" || r.URL.Query().Get("profileId") != "default" {
+			t.Fatalf("query = %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"providerId":"openai","loginSessionId":"session-1","projectId":"acme","profileId":"default","mode":"device_code","status":"authenticated","authenticated":true,"expiresAt":123000,"completedAt":122000}`))
 	}))
 	defer httpServer.Close()
 
@@ -287,19 +307,16 @@ func TestLLMLoginStatusMapsCompletedToAuthenticated(t *testing.T) {
 	}
 }
 
-func TestLLMResponsesMapsToOpenAICodex(t *testing.T) {
+func TestLLMResponsesUsesGenericHTTPContract(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/projects/acme/codex/responses" {
+		if r.URL.Path != "/v1/projects/acme/llm/responses" {
 			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if r.URL.Query().Get("profileId") != "default" {
-			t.Fatalf("profileId = %q", r.URL.Query().Get("profileId"))
 		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "gpt-5.5" || body["intelligence"] != "thinking" {
+		if body["providerId"] != "openai" || body["profileId"] != "default" || body["model"] != "gpt-5.5" || body["intelligence"] != "thinking" {
 			t.Fatalf("body = %#v", body)
 		}
 		reasoning := body["reasoning"].(map[string]any)
@@ -343,26 +360,27 @@ func TestLLMStudioLoginStatusAndResponses(t *testing.T) {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
 		switch r.URL.Path {
-		case "/v1/projects/acme/auth/lmstudio/api-key":
+		case "/v1/projects/acme/llm/login":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["apiKey"] != apiKey || body["baseUrl"] != "http://127.0.0.1:1234" {
+			authFields, ok := body["authFields"].(map[string]any)
+			if !ok || body["providerId"] != "lmstudio" || body["profileId"] != "default" || body["mode"] != "api_key" || authFields["apiKey"] != apiKey || authFields["baseUrl"] != "http://127.0.0.1:1234" {
 				t.Fatalf("body = %#v", body)
 			}
-			_, _ = w.Write([]byte(`{"authenticated":true,"providerId":"lmstudio","projectId":"acme","profileId":"default","baseUrl":"http://127.0.0.1:1234","accountId":"lmstudio:127.0.0.1:1234","modelCount":1}`))
-		case "/v1/projects/acme/auth/lmstudio/status":
-			_, _ = w.Write([]byte(`{"authenticated":true,"providerId":"lmstudio","projectId":"acme","profileId":"default","baseUrl":"http://127.0.0.1:1234","accountId":"lmstudio:127.0.0.1:1234"}`))
-		case "/v1/projects/acme/lmstudio/responses":
-			if r.URL.Query().Get("profileId") != "default" {
-				t.Fatalf("profileId = %q", r.URL.Query().Get("profileId"))
+			_, _ = w.Write([]byte(`{"authenticated":true,"providerId":"lmstudio","projectId":"acme","profileId":"default","loginSessionId":"lmstudio-api-key-default","mode":"api_key","status":"authenticated","baseUrl":"http://127.0.0.1:1234","accountId":"lmstudio:127.0.0.1:1234","modelCount":1}`))
+		case "/v1/projects/acme/llm/status":
+			if r.URL.Query().Get("providerId") != "lmstudio" || r.URL.Query().Get("profileId") != "default" {
+				t.Fatalf("query = %q", r.URL.RawQuery)
 			}
+			_, _ = w.Write([]byte(`{"authenticated":true,"providerId":"lmstudio","projectId":"acme","profileId":"default","baseUrl":"http://127.0.0.1:1234","accountId":"lmstudio:127.0.0.1:1234"}`))
+		case "/v1/projects/acme/llm/responses":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["model"] != "model-a" {
+			if body["providerId"] != "lmstudio" || body["profileId"] != "default" || body["model"] != "model-a" {
 				t.Fatalf("body = %#v", body)
 			}
 			_, _ = w.Write([]byte(`{"events":[{"type":"response.output_text.delta","payload":"{\"type\":\"response.output_text.delta\",\"delta\":\"ok lmstudio\"}"},{"type":"done"}],"outputText":"ok lmstudio"}`))
@@ -404,7 +422,16 @@ func TestLLMStudioLoginStatusAndResponses(t *testing.T) {
 }
 
 func TestLLMUnknownProviderReturnsStructuredError(t *testing.T) {
-	server := New(Options{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/projects/acme/llm/status" || r.URL.Query().Get("providerId") != "anthropic" {
+			t.Fatalf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"ERR_LLM_PROVIDER_UNKNOWN","message":"provider LLM desconhecido"}}`))
+	}))
+	defer httpServer.Close()
+
+	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
 	text, isErr := server.callTool(context.Background(), "llm_status", map[string]any{
 		"providerId": "anthropic",
 		"projectId":  "acme",

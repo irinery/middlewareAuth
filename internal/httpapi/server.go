@@ -115,6 +115,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleProjectRoute(w http.ResponseWriter, r *http.Request, projectID string, rest []string) {
+	if len(rest) == 2 && rest[0] == "llm" && rest[1] == "providers" && r.Method == http.MethodGet {
+		h.handleLLMProviders(w, r, projectID)
+		return
+	}
+	if len(rest) == 2 && rest[0] == "llm" && rest[1] == "login" && r.Method == http.MethodPost {
+		h.handleLLMLogin(w, r, projectID)
+		return
+	}
+	if len(rest) == 3 && rest[0] == "llm" && rest[1] == "login-sessions" && r.Method == http.MethodGet {
+		h.handleLLMLoginStatus(w, r, projectID, rest[2])
+		return
+	}
+	if len(rest) == 2 && rest[0] == "llm" && rest[1] == "status" && r.Method == http.MethodGet {
+		h.handleLLMStatus(w, r, projectID)
+		return
+	}
+	if len(rest) == 2 && rest[0] == "llm" && rest[1] == "refresh" && r.Method == http.MethodPost {
+		h.handleLLMRefresh(w, r, projectID)
+		return
+	}
+	if len(rest) == 2 && rest[0] == "llm" && rest[1] == "responses" && r.Method == http.MethodPost {
+		h.handleLLMResponses(w, r, projectID)
+		return
+	}
 	if len(rest) == 3 && rest[0] == "auth" && rest[1] == "openai" && rest[2] == "login" && r.Method == http.MethodPost {
 		h.handleLogin(w, r, projectID)
 		return

@@ -54,21 +54,27 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request, projectID 
 	if input.Mode == "" {
 		input.Mode = "oauth"
 	}
+	var response *LoginStartResponse
+	var err error
 	switch input.Mode {
 	case "oauth":
-		h.startOAuthLogin(w, r, projectID, profileID)
+		response, err = h.startOAuthLogin(r.Context(), projectID, profileID)
 	case "device_code":
-		h.startDeviceCodeLogin(w, r, projectID, profileID)
+		response, err = h.startDeviceCodeLogin(r.Context(), projectID, profileID)
 	default:
-		writeError(w, security.NewError("ERR_LOGIN_START_FAILED", "modo de login invalido", http.StatusBadRequest))
+		err = security.NewError("ERR_LOGIN_START_FAILED", "modo de login invalido", http.StatusBadRequest)
 	}
-}
-
-func (h *Handler) startOAuthLogin(w http.ResponseWriter, r *http.Request, projectID, profileID string) {
-	flow, err := oauth.CreateAuthorizationFlow(r.Context(), h.cfg.OAuth, "middleware-codex-oauth")
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) startOAuthLogin(ctx context.Context, projectID, profileID string) (*LoginStartResponse, error) {
+	flow, err := oauth.CreateAuthorizationFlow(ctx, h.cfg.OAuth, "middleware-codex-oauth")
+	if err != nil {
+		return nil, err
 	}
 	sessionID := randomID()
 	expiresAt := time.Now().Add(15 * time.Minute).UnixMilli()
@@ -81,21 +87,19 @@ func (h *Handler) startOAuthLogin(w http.ResponseWriter, r *http.Request, projec
 		Flow:           *flow,
 		ExpiresAt:      expiresAt,
 	}); err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusOK, LoginStartResponse{
+	return &LoginStartResponse{
 		LoginSessionID: sessionID,
 		AuthURL:        flow.URL,
 		ExpiresAt:      expiresAt,
-	})
+	}, nil
 }
 
-func (h *Handler) startDeviceCodeLogin(w http.ResponseWriter, r *http.Request, projectID, profileID string) {
-	device, err := oauth.RequestDeviceCode(r.Context(), h.client, h.cfg.OAuth)
+func (h *Handler) startDeviceCodeLogin(ctx context.Context, projectID, profileID string) (*LoginStartResponse, error) {
+	device, err := oauth.RequestDeviceCode(ctx, h.client, h.cfg.OAuth)
 	if err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	sessionID := randomID()
 	expiresAt := time.Now().Add(time.Duration(device.ExpiresInMs) * time.Millisecond).UnixMilli()
@@ -107,8 +111,7 @@ func (h *Handler) startDeviceCodeLogin(w http.ResponseWriter, r *http.Request, p
 		Status:         "pending",
 		ExpiresAt:      expiresAt,
 	}); err != nil {
-		writeError(w, err)
-		return
+		return nil, err
 	}
 	go func() {
 		ctx, cancel := contextWithTimeout(time.Duration(device.ExpiresInMs) * time.Millisecond)
@@ -128,12 +131,12 @@ func (h *Handler) startDeviceCodeLogin(w http.ResponseWriter, r *http.Request, p
 		}
 		h.markSessionCompleted(sessionID)
 	}()
-	writeJSON(w, http.StatusOK, LoginStartResponse{
+	return &LoginStartResponse{
 		LoginSessionID:  sessionID,
 		VerificationURL: device.VerificationURL,
 		UserCode:        device.UserCode,
 		ExpiresAt:       expiresAt,
-	})
+	}, nil
 }
 
 func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -201,16 +204,23 @@ func (h *Handler) handleLoginSessionStatus(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request, projectID string) {
 	profileID := profileFromRequest(r)
-	credential, err := h.store.LoadAuthProfile(r.Context(), projectID, profileID)
+	response, err := h.openAIStatus(r.Context(), projectID, profileID)
 	if err != nil {
-		if security.Code(err) == "ERR_AUTH_PROFILE_NOT_FOUND" {
-			writeJSON(w, http.StatusOK, StatusResponse{Authenticated: false, ProjectID: projectID, ProfileID: profileID})
-			return
-		}
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, StatusResponse{
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) openAIStatus(ctx context.Context, projectID, profileID string) (*StatusResponse, error) {
+	credential, err := h.store.LoadAuthProfile(ctx, projectID, profileID)
+	if err != nil {
+		if security.Code(err) == "ERR_AUTH_PROFILE_NOT_FOUND" {
+			return &StatusResponse{Authenticated: false, ProjectID: projectID, ProfileID: profileID}, nil
+		}
+		return nil, err
+	}
+	return &StatusResponse{
 		Authenticated:   true,
 		ProjectID:       projectID,
 		ProfileID:       profileID,
@@ -218,24 +228,33 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request, projectID
 		Email:           credential.Email,
 		ChatGPTPlanType: credential.ChatGPTPlanType,
 		Expires:         credential.Expires,
-	})
+	}, nil
 }
 
 func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request, projectID string) {
 	profileID := profileFromRequest(r)
-	credential, err := h.refresher.ResolveFreshCredential(r.Context(), projectID, profileID, 3600000)
+	response, err := h.refreshOpenAI(r.Context(), projectID, profileID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, StatusResponse{
-		Authenticated: true,
-		ProjectID:     projectID,
-		ProfileID:     profileID,
-		AccountID:     credential.AccountID,
-		Email:         credential.Email,
-		Expires:       credential.Expires,
-	})
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) refreshOpenAI(ctx context.Context, projectID, profileID string) (*StatusResponse, error) {
+	credential, err := h.refresher.ResolveFreshCredential(ctx, projectID, profileID, 3600000)
+	if err != nil {
+		return nil, err
+	}
+	return &StatusResponse{
+		Authenticated:   true,
+		ProjectID:       projectID,
+		ProfileID:       profileID,
+		AccountID:       credential.AccountID,
+		Email:           credential.Email,
+		ChatGPTPlanType: credential.ChatGPTPlanType,
+		Expires:         credential.Expires,
+	}, nil
 }
 
 func (h *Handler) saveOAuthCredentials(ctx context.Context, projectID, profileID string, credentials *oauth.OAuthCredentials) error {
