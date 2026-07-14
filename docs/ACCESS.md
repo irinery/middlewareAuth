@@ -13,7 +13,7 @@ Config minima:
 ```sh
 export MIDDLEWARE_SECRET_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 export MIDDLEWARE_CLIENT_TOKEN="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
-export MIDDLEWARE_STATE_DIR='/Users/irinery/Documents/middlewareAuth/.middleware-state'
+export MIDDLEWARE_STATE_DIR="$PWD/.middleware-state"
 export HTTP_BIND_ADDR='127.0.0.1'
 export HTTP_PORT=18787
 ```
@@ -130,7 +130,7 @@ Logs locais:
 ```sh
 MIDDLEWARE_SECRET_KEY="$MIDDLEWARE_SECRET_KEY" \
 MIDDLEWARE_CLIENT_TOKEN="$MIDDLEWARE_CLIENT_TOKEN" \
-MIDDLEWARE_STATE_DIR='/Users/irinery/Documents/middlewareAuth/.middleware-state' \
+MIDDLEWARE_STATE_DIR="$PWD/.middleware-state" \
 HTTP_BIND_ADDR='127.0.0.1' \
 HTTP_PORT=18787 \
 go run ./cmd/middleware-codex-oauth 2>&1 | tee /tmp/middleware-auth.log
