@@ -121,7 +121,9 @@ printf '%s' "$catalog" | jq -e \
 	'.contractVersion == "middlewareauth.llm.v1"
 	 and ([.providers[].id] | index("openai") != null)
 	 and ([.providers[].id] | index("lmstudio") != null)
-	 and ([.providers[] | select(.id == "lmstudio") | .auth.fields[] | select(.id == "apiKey" and .secret == true)] | length == 1)' \
+	 and ([.providers[] | select(.id == "lmstudio") | .auth.fields[] | select(.id == "apiKey" and .secret == true)] | length == 1)
+	 and ([.providers[] | select(.id == "openai" and .capabilities.intelligence == true and .capabilities.store == true)] | length == 1)
+	 and ([.providers[] | select(.id == "lmstudio" and .capabilities.intelligence == false and .capabilities.store == false)] | length == 1)' \
 	>/dev/null
 
 login_payload=$(jq -cn \

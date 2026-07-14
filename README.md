@@ -35,16 +35,58 @@ Por default o servidor escuta so em `127.0.0.1`; para expor em rede, configure `
 
 ## Rodar
 
+Terminal 1: exporte as variaveis e suba o servidor HTTP local.
+
 ```sh
+cd /Users/irinery/Documents/middlewareAuth
+
+export MIDDLEWARE_SECRET_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+export MIDDLEWARE_CLIENT_TOKEN="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+export MIDDLEWARE_STATE_DIR='/Users/irinery/Documents/middlewareAuth/.middleware-state'
+export HTTP_BIND_ADDR='127.0.0.1'
+export HTTP_PORT=18787
+
 go run ./cmd/middleware-codex-oauth
 ```
 
-Mais exemplos de acesso: [docs/ACCESS.md](/Users/irinery/Documents/middlewareAuth/docs/ACCESS.md).
+Terminal 2: valide que subiu.
+
+```sh
+curl -s http://localhost:18787/healthz
+```
+
+Para reutilizar o mesmo token em outro terminal, exporte o mesmo `MIDDLEWARE_CLIENT_TOKEN` que foi gerado no Terminal 1. Nao use `.env`.
+
+Build opcional:
+
+```sh
+go build -o ./bin/middleware-codex-oauth ./cmd/middleware-codex-oauth
+go build -o ./bin/middleware-codex-oauth-mcp ./cmd/middleware-codex-oauth-mcp
+```
+
+Rodar binario:
+
+```sh
+./bin/middleware-codex-oauth
+```
+
+Mais exemplos de acesso: [docs/ACCESS.md](./docs/ACCESS.md).
 
 Endpoints principais:
 
 ```text
 GET  http://localhost:18787/healthz
+GET  http://localhost:18787/v1/projects/{projectId}/llm/providers
+POST http://localhost:18787/v1/projects/{projectId}/llm/login
+GET  http://localhost:18787/v1/projects/{projectId}/llm/login-sessions/{loginSessionId}
+GET  http://localhost:18787/v1/projects/{projectId}/llm/status
+POST http://localhost:18787/v1/projects/{projectId}/llm/refresh
+POST http://localhost:18787/v1/projects/{projectId}/llm/responses
+```
+
+O contrato generico e seus payloads estao em [docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md). Rotas especificas continuam disponiveis para compatibilidade:
+
+```text
 POST http://localhost:18787/v1/projects/{projectId}/auth/openai/login
 GET  http://localhost:18787/v1/auth/openai/callback
 GET  http://localhost:18787/v1/projects/{projectId}/auth/openai/login-sessions/{loginSessionId}
@@ -62,30 +104,65 @@ Nos endpoints protegidos:
 Authorization: Bearer <MIDDLEWARE_CLIENT_TOKEN>
 ```
 
-Exemplo local:
+Exemplo local pelo contrato canonico:
 
 ```sh
 curl -s http://localhost:18787/healthz
 
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
-  http://localhost:18787/v1/projects/acme/auth/openai/status
+  http://localhost:18787/v1/projects/acme/llm/providers
 
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"profileId":"default","mode":"oauth"}' \
-  http://localhost:18787/v1/projects/acme/auth/openai/login
+  -d '{"providerId":"openai","profileId":"default","mode":"device_code"}' \
+  http://localhost:18787/v1/projects/acme/llm/login
 
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
-  http://localhost:18787/v1/projects/acme/auth/openai/login-sessions/<loginSessionId>
+  "http://localhost:18787/v1/projects/acme/llm/login-sessions/<loginSessionId>?providerId=openai&profileId=default"
+```
+
+LM Studio via middleware:
+
+```sh
+export LMSTUDIO_BASE_URL='http://127.0.0.1:1234'
+export LMSTUDIO_API_KEY='<api key do LM Studio>'
+
+curl -s \
+  -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+	\"providerId\": \"lmstudio\",
+    \"profileId\": \"default\",
+	\"mode\": \"api_key\",
+	\"authFields\": {
+	  \"baseUrl\": \"$LMSTUDIO_BASE_URL\",
+	  \"apiKey\": \"$LMSTUDIO_API_KEY\"
+	}
+  }" \
+  http://localhost:18787/v1/projects/acme/llm/login
+
+curl -s \
+  -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+	"providerId": "lmstudio",
+	"profileId": "default",
+    "model": "local-model",
+    "input": [{"role":"user","content":"responda ok"}],
+    "stream": false
+  }' \
+  http://localhost:18787/v1/projects/acme/llm/responses
 ```
 
 ## Verificacao
 
 ```sh
 sh ./scripts/check-no-secrets.sh
+jq empty ./docs/examples/llm-http-payloads.json
+shellcheck -s sh ./scripts/e2e-live-lmstudio.sh
 go test ./...
 go test -race ./...
 go build ./cmd/middleware-codex-oauth
@@ -97,12 +174,17 @@ go build ./cmd/middleware-codex-oauth-mcp
 Servidor MCP local por stdio:
 
 ```sh
+MIDDLEWARE_BASE_URL='http://localhost:18787' \
+MIDDLEWARE_CLIENT_TOKEN="$MIDDLEWARE_CLIENT_TOKEN" \
+MCP_DEFAULT_PROJECT_ID='acme' \
 go run ./cmd/middleware-codex-oauth-mcp
 ```
 
-Detalhes e config de cliente: [docs/MCP.md](/Users/irinery/Documents/middlewareAuth/docs/MCP.md).
+O MCP nao sobe porta HTTP. Ele fala por stdin/stdout e chama o middleware HTTP local em `MIDDLEWARE_BASE_URL`.
 
-Para clientes MCP novos, use o contrato generico `llm_*` descrito em [docs/LLM_PROVIDER_CONTRACT.md](/Users/irinery/Documents/middlewareAuth/docs/LLM_PROVIDER_CONTRACT.md). O provider `openai` mapeia para as tools legadas `openai_*`/`codex_responses`, que seguem disponiveis por compatibilidade.
+Detalhes e config de cliente: [docs/MCP.md](./docs/MCP.md).
+
+Para clientes MCP novos, use o contrato generico `llm_*` descrito em [docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md). As tools genericas chamam a API HTTP canonica; `openai_*` e `codex_responses` seguem disponiveis apenas por compatibilidade.
 O provider `lmstudio` usa API key local salva criptografada pelo middleware e fala com a API OpenAI-compatible do LM Studio.
 
 Para escolher comportamento tipo `Instant`/`Thinking` e esforco reflexivo, use `llm_responses` com `providerId`, `model`, `intelligence`, `reasoningEffort` ou `reasoning`. O wrapper aceita valores livres e `extra` para seletores futuros do backend.

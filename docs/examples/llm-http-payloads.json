@@ -1,0 +1,387 @@
+{
+  "contractVersion": "middlewareauth.llm.v1",
+  "conventions": {
+    "baseURL": "http://127.0.0.1:18787",
+    "projectId": "pockettrace",
+    "authorization": "Bearer <MIDDLEWARE_CLIENT_TOKEN>",
+    "timestamps": "unix_epoch_milliseconds"
+  },
+  "fieldPolicy": {
+    "stable": [
+      "contractVersion",
+      "providerId",
+      "projectId",
+      "profileId",
+      "authenticated",
+      "status",
+      "loginSessionId",
+      "events",
+      "responseId",
+      "usage",
+      "outputText",
+      "error.code",
+      "error.message"
+    ],
+    "providerSpecificValues": [
+      "providers[].models[].id",
+      "providers[].auth.modes[]",
+      "providers[].auth.fields[]",
+      "authFields",
+      "model",
+      "accountId",
+      "baseUrl",
+      "email",
+      "planType",
+      "extra"
+    ],
+    "reservedMetadataContainer": "metadata",
+    "unknownTopLevelResponseFields": "ignore"
+  },
+  "providers": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/pockettrace/llm/providers"
+    },
+    "response": {
+      "contractVersion": "middlewareauth.llm.v1",
+      "providers": [
+        {
+          "id": "openai",
+          "title": "OpenAI",
+          "auth": {
+            "required": true,
+            "modes": ["oauth", "device_code"],
+            "defaultMode": "device_code",
+            "fields": []
+          },
+          "defaults": {
+            "profileId": "default",
+            "model": "gpt-5.5"
+          },
+          "models": [
+            { "id": "gpt-5.5", "title": "gpt-5.5" },
+            { "id": "gpt-5", "title": "gpt-5" }
+          ],
+          "capabilities": {
+            "stream": true,
+            "refresh": true,
+            "intelligence": true,
+            "reasoningEffort": true,
+            "systemInstructions": true,
+            "tools": false,
+            "store": true
+          }
+        },
+        {
+          "id": "lmstudio",
+          "title": "LM Studio",
+          "auth": {
+            "required": true,
+            "modes": ["api_key"],
+            "defaultMode": "api_key",
+            "fields": [
+              {
+                "id": "baseUrl",
+                "title": "Base URL",
+                "type": "url",
+                "required": true,
+                "secret": false
+              },
+              {
+                "id": "apiKey",
+                "title": "API key",
+                "type": "password",
+                "required": true,
+                "secret": true
+              }
+            ]
+          },
+          "defaults": {
+            "profileId": "default",
+            "model": "local-model"
+          },
+          "models": [],
+          "capabilities": {
+            "stream": true,
+            "refresh": false,
+            "intelligence": false,
+            "reasoningEffort": false,
+            "systemInstructions": true,
+            "tools": false,
+            "store": false
+          }
+        }
+      ]
+    }
+  },
+  "login": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/projects/pockettrace/llm/login"
+    },
+    "openaiDeviceCodeBody": {
+      "providerId": "openai",
+      "profileId": "default",
+      "mode": "device_code"
+    },
+    "openaiOAuthBody": {
+      "providerId": "openai",
+      "profileId": "default",
+      "mode": "oauth"
+    },
+    "apiKeyBody": {
+      "providerId": "lmstudio",
+      "profileId": "default",
+      "mode": "api_key",
+      "authFields": {
+        "baseUrl": "http://127.0.0.1:1234",
+        "apiKey": "<secret>"
+      }
+    },
+    "pendingResponse": {
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "loginSessionId": "sess_123",
+      "mode": "device_code",
+      "status": "pending",
+      "authenticated": false,
+      "verificationUrl": "https://auth.example/device",
+      "userCode": "ABCD-EFGH",
+      "expiresAt": 1780000000000
+    },
+    "authenticatedResponse": {
+      "providerId": "lmstudio",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "loginSessionId": "lmstudio-api-key-default",
+      "mode": "api_key",
+      "status": "authenticated",
+      "authenticated": true,
+      "baseUrl": "http://127.0.0.1:1234",
+      "accountId": "lmstudio:127.0.0.1:1234",
+      "modelCount": 1,
+      "savedAt": 1779999900000
+    }
+  },
+  "loginStatus": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/pockettrace/llm/login-sessions/sess_123?providerId=openai&profileId=default"
+    },
+    "response": {
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "loginSessionId": "sess_123",
+      "mode": "device_code",
+      "status": "authenticated",
+      "authenticated": true,
+      "expiresAt": 1780000000000,
+      "completedAt": 1779999900000
+    },
+    "expiredResponse": {
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "loginSessionId": "sess_123",
+      "mode": "device_code",
+      "status": "expired",
+      "authenticated": false,
+      "expiresAt": 1779999900000,
+      "error": {
+        "code": "ERR_LLM_AUTH_EXPIRED",
+        "message": "sessao de autenticacao expirada"
+      }
+    },
+    "failedResponse": {
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "loginSessionId": "sess_123",
+      "mode": "device_code",
+      "status": "failed",
+      "authenticated": false,
+      "expiresAt": 1780000000000,
+      "completedAt": 1779999900000,
+      "error": {
+        "code": "ERR_LLM_PROVIDER_UNAVAILABLE",
+        "message": "provider LLM indisponivel"
+      }
+    }
+  },
+  "status": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/pockettrace/llm/status?providerId=openai&profileId=default"
+    },
+    "authenticatedResponse": {
+      "authenticated": true,
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "accountId": "account-123",
+      "email": "user@example.com",
+      "planType": "plus",
+      "expires": 1780000000000
+    },
+    "unauthenticatedResponse": {
+      "authenticated": false,
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default"
+    }
+  },
+  "refresh": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/projects/pockettrace/llm/refresh",
+      "body": {
+        "providerId": "openai",
+        "profileId": "default"
+      }
+    },
+    "response": {
+      "authenticated": true,
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "expires": 1780000000000
+    },
+    "unsupportedResponse": {
+      "error": {
+        "code": "ERR_LLM_REFRESH_UNSUPPORTED",
+        "message": "provider nao suporta refresh"
+      }
+    }
+  },
+  "responses": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/projects/pockettrace/llm/responses",
+      "body": {
+        "providerId": "openai",
+        "profileId": "default",
+        "model": "gpt-5.5",
+        "instructions": "Responda de forma objetiva.",
+        "input": [
+          { "role": "user", "content": "Responda apenas: ok" }
+        ],
+        "stream": true,
+        "store": false,
+        "intelligence": "thinking",
+        "reasoning": {
+          "effort": "medium",
+          "summary": "auto"
+        }
+      }
+    },
+    "response": {
+      "events": [
+        {
+          "type": "response.output_text.delta",
+          "payload": "{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}"
+        },
+        { "type": "done" }
+      ],
+      "responseId": "resp_123",
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 1,
+        "totalTokens": 11
+      },
+      "outputText": "ok"
+    }
+  },
+  "errors": {
+    "providerUnknown": {
+      "httpStatus": 400,
+      "response": { "error": { "code": "ERR_LLM_PROVIDER_UNKNOWN", "message": "provider LLM desconhecido" } }
+    },
+    "authRequired": {
+      "httpStatus": 401,
+      "response": { "error": { "code": "ERR_LLM_AUTH_REQUIRED", "message": "autenticacao do provider necessaria" } }
+    },
+    "authExpired": {
+      "httpStatus": 401,
+      "response": { "error": { "code": "ERR_LLM_AUTH_EXPIRED", "message": "credencial expirada ou invalida" } }
+    },
+    "refreshUnsupported": {
+      "httpStatus": 400,
+      "response": { "error": { "code": "ERR_LLM_REFRESH_UNSUPPORTED", "message": "provider nao suporta refresh" } }
+    },
+    "requestInvalid": {
+      "httpStatus": 400,
+      "response": { "error": { "code": "ERR_LLM_REQUEST_INVALID", "message": "request LLM invalido" } }
+    },
+    "providerUnavailable": {
+      "httpStatus": 502,
+      "response": { "error": { "code": "ERR_LLM_PROVIDER_UNAVAILABLE", "message": "provider LLM indisponivel" } }
+    },
+    "rateLimited": {
+      "httpStatus": 429,
+      "response": { "error": { "code": "ERR_LLM_RATE_LIMITED", "message": "provider aplicou rate limit" } }
+    },
+    "responseEmpty": {
+      "httpStatus": 502,
+      "response": { "error": { "code": "ERR_LLM_RESPONSE_EMPTY", "message": "provider retornou resposta vazia" } }
+    },
+    "internal": {
+      "httpStatus": 500,
+      "response": { "error": { "code": "ERR_LLM_INTERNAL", "message": "erro interno" } }
+    }
+  },
+  "mcp": {
+    "responseRule": "result.content[0].text contem o JSON do mesmo contrato HTTP",
+    "tools": {
+      "llm_providers": {
+        "arguments": { "projectId": "pockettrace" }
+      },
+      "llm_login_start": {
+        "arguments": {
+          "providerId": "lmstudio",
+          "projectId": "pockettrace",
+          "profileId": "default",
+          "mode": "api_key",
+          "authFields": {
+            "baseUrl": "http://127.0.0.1:1234",
+            "apiKey": "<secret>"
+          }
+        }
+      },
+      "llm_login_status": {
+        "arguments": {
+          "providerId": "openai",
+          "projectId": "pockettrace",
+          "profileId": "default",
+          "loginSessionId": "sess_123"
+        }
+      },
+      "llm_status": {
+        "arguments": {
+          "providerId": "openai",
+          "projectId": "pockettrace",
+          "profileId": "default"
+        }
+      },
+      "llm_refresh": {
+        "arguments": {
+          "providerId": "openai",
+          "projectId": "pockettrace",
+          "profileId": "default"
+        }
+      },
+      "llm_responses": {
+        "arguments": {
+          "providerId": "openai",
+          "projectId": "pockettrace",
+          "profileId": "default",
+          "model": "gpt-5.5",
+          "input": "Responda apenas: ok",
+          "stream": true,
+          "store": false
+        }
+      }
+    }
+  }
+}
