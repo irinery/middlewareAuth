@@ -321,7 +321,7 @@ Codigos publicos:
 | `ERR_LLM_AUTH_EXPIRED` | 401 | Reautenticar. |
 | `ERR_LLM_REFRESH_UNSUPPORTED` | 400 | Ocultar refresh; o catalogo deve publicar `refresh=false`. |
 | `ERR_LLM_REQUEST_INVALID` | 400/413 | Corrigir ou limitar payload. |
-| `ERR_LLM_PROVIDER_UNAVAILABLE` | 502 | Acionar fallback local do consumidor. |
+| `ERR_LLM_PROVIDER_UNAVAILABLE` | 408/502/504 | Acionar fallback local do consumidor. `408` indica cancelamento, `504` timeout e `502` indisponibilidade/falha 5xx do provider. |
 | `ERR_LLM_RATE_LIMITED` | 429 | Aplicar retry/backoff no consumidor. |
 | `ERR_LLM_RESPONSE_EMPTY` | 502 | Tratar como falha transitoria/fallback. |
 | `ERR_LLM_INTERNAL` | 500 | Tratar como falha transitoria/fallback. |

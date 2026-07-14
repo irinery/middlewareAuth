@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,6 +27,20 @@ type missingCredentialRefresher struct{}
 
 func (missingCredentialRefresher) ResolveFreshCredential(context.Context, string, string, int64) (*auth.StoredOAuthCredential, error) {
 	return nil, security.NewError("ERR_AUTH_PROFILE_NOT_FOUND", "perfil ausente", http.StatusNotFound)
+}
+
+type staticCredentialRefresher struct{}
+
+func (staticCredentialRefresher) ResolveFreshCredential(context.Context, string, string, int64) (*auth.StoredOAuthCredential, error) {
+	return &auth.StoredOAuthCredential{Access: "opaque-access", AccountID: "account-test"}, nil
+}
+
+type errorCodexSender struct {
+	err error
+}
+
+func (s errorCodexSender) SendCodexResponse(context.Context, auth.StoredOAuthCredential, codex.CodexResponseRequest, codex.CodexTransportOptions) (*codex.CodexResponseStream, error) {
+	return nil, s.err
 }
 
 func TestLLMProvidersExposesCanonicalBlackBoxContract(t *testing.T) {
@@ -219,6 +234,50 @@ func TestLLMResponsesNormalizesMissingCredentialAndUnknownProvider(t *testing.T)
 
 	assertError(`{"providerId":"openai","profileId":"default","model":"gpt-test","input":[{"role":"user","content":"oi"}]}`, "ERR_LLM_AUTH_REQUIRED", http.StatusUnauthorized)
 	assertError(`{"providerId":"unknown","profileId":"default","model":"x","input":[{"role":"user","content":"oi"}]}`, "ERR_LLM_PROVIDER_UNKNOWN", http.StatusBadRequest)
+}
+
+func TestLLMResponsesNormalizesProviderFailuresWithoutLeakingCause(t *testing.T) {
+	const canary = "provider-error-secret-canary"
+	tests := []struct {
+		name           string
+		providerCode   string
+		providerStatus int
+		wantCode       string
+		wantStatus     int
+	}{
+		{name: "unauthorized", providerCode: "ERR_CODEX_AUTH_REJECTED", providerStatus: http.StatusUnauthorized, wantCode: "ERR_LLM_AUTH_EXPIRED", wantStatus: http.StatusUnauthorized},
+		{name: "cancelled", providerCode: "ERR_CONTEXT_CANCELLED", providerStatus: http.StatusRequestTimeout, wantCode: "ERR_LLM_PROVIDER_UNAVAILABLE", wantStatus: http.StatusRequestTimeout},
+		{name: "timeout", providerCode: "ERR_CODEX_TIMEOUT", providerStatus: http.StatusGatewayTimeout, wantCode: "ERR_LLM_PROVIDER_UNAVAILABLE", wantStatus: http.StatusGatewayTimeout},
+		{name: "rate limited", providerCode: "ERR_CODEX_RATE_LIMITED", providerStatus: http.StatusTooManyRequests, wantCode: "ERR_LLM_RATE_LIMITED", wantStatus: http.StatusTooManyRequests},
+		{name: "upstream failure", providerCode: "ERR_CODEX_HTTP_FAILED", providerStatus: http.StatusBadGateway, wantCode: "ERR_LLM_PROVIDER_UNAVAILABLE", wantStatus: http.StatusBadGateway},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := testHandler(t)
+			handler.refresher = staticCredentialRefresher{}
+			handler.codex = errorCodexSender{err: security.Wrap(test.providerCode, "provider failure", test.providerStatus, errors.New(canary))}
+			req := httptest.NewRequest(http.MethodPost, "/v1/projects/pockettrace/llm/responses", bytes.NewBufferString(`{"providerId":"openai","profileId":"default","model":"gpt-test","input":[{"role":"user","content":"oi"}]}`))
+			req.Header.Set("Authorization", "Bearer "+handlerTestToken)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != test.wantStatus {
+				t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+			}
+			var response MiddlewareErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Error.Code != test.wantCode {
+				t.Fatalf("code = %s, want %s body=%s", response.Error.Code, test.wantCode, rec.Body.String())
+			}
+			if stringsContainAny(rec.Body.String(), canary, test.providerCode, "provider failure") {
+				t.Fatalf("provider error leaked through public contract: %s", rec.Body.String())
+			}
+		})
+	}
 }
 
 func TestLLMLoginStatusNormalizesSessionErrors(t *testing.T) {

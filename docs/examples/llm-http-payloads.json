@@ -316,6 +316,7 @@
     },
     "providerUnavailable": {
       "httpStatus": 502,
+      "httpStatuses": [408, 502, 504],
       "response": { "error": { "code": "ERR_LLM_PROVIDER_UNAVAILABLE", "message": "provider LLM indisponivel" } }
     },
     "rateLimited": {

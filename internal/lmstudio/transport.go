@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -113,7 +114,7 @@ func (t *Transport) ListModels(ctx context.Context, baseURL string, apiKey strin
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return nil, security.Wrap("ERR_LMSTUDIO_HTTP_FAILED", "falha HTTP ao chamar LM Studio", http.StatusBadGateway, err)
+		return nil, mapTransportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	raw, err := readLimited(resp.Body, maxModelsBytes)
@@ -121,7 +122,7 @@ func (t *Transport) ListModels(ctx context.Context, baseURL string, apiKey strin
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, security.Wrap("ERR_LMSTUDIO_HTTP_FAILED", "LM Studio recusou autenticacao/listagem: "+security.Redact(string(raw)), http.StatusBadGateway, nil)
+		return nil, mapHTTPStatus(resp.StatusCode)
 	}
 	var parsed struct {
 		Data []Model `json:"data"`
@@ -157,12 +158,12 @@ func (t *Transport) SendResponse(ctx context.Context, baseURL string, apiKey str
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return nil, security.Wrap("ERR_LMSTUDIO_HTTP_FAILED", "falha HTTP ao chamar LM Studio", http.StatusBadGateway, err)
+		return nil, mapTransportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		rawResp, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		return nil, security.Wrap("ERR_LMSTUDIO_HTTP_FAILED", "LM Studio retornou erro: "+security.Redact(string(rawResp)), http.StatusBadGateway, nil)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2<<20))
+		return nil, mapHTTPStatus(resp.StatusCode)
 	}
 	rawResp, err := readLimited(resp.Body, maxResponseBytes)
 	if err != nil {
@@ -177,6 +178,36 @@ func (t *Transport) SendResponse(ctx context.Context, baseURL string, apiKey str
 func validAPIKey(apiKey string) bool {
 	apiKey = strings.TrimSpace(apiKey)
 	return apiKey != "" && len(apiKey) <= maxAPIKeyBytes
+}
+
+func mapTransportError(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return security.Wrap("ERR_CONTEXT_CANCELLED", "request LM Studio cancelado", http.StatusRequestTimeout, err)
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return security.Wrap("ERR_LMSTUDIO_TIMEOUT", "timeout ao chamar LM Studio", http.StatusGatewayTimeout, err)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return security.Wrap("ERR_LMSTUDIO_TIMEOUT", "timeout ao chamar LM Studio", http.StatusGatewayTimeout, err)
+	}
+	return security.Wrap("ERR_LMSTUDIO_HTTP_FAILED", "falha HTTP ao chamar LM Studio", http.StatusBadGateway, err)
+}
+
+func mapHTTPStatus(status int) error {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return security.NewError("ERR_LMSTUDIO_AUTH_REJECTED", "LM Studio recusou autenticacao", http.StatusUnauthorized)
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return security.NewError("ERR_LMSTUDIO_TIMEOUT", "timeout ao chamar LM Studio", http.StatusGatewayTimeout)
+	case http.StatusTooManyRequests:
+		return security.NewError("ERR_LMSTUDIO_RATE_LIMITED", "LM Studio aplicou rate limit", http.StatusTooManyRequests)
+	default:
+		if status >= 400 && status < 500 {
+			return security.NewError("ERR_LMSTUDIO_REQUEST_INVALID", "LM Studio recusou o request", http.StatusBadRequest)
+		}
+		return security.NewError("ERR_LMSTUDIO_HTTP_FAILED", "LM Studio indisponivel", http.StatusBadGateway)
+	}
 }
 
 func readLimited(reader io.Reader, limit int64) ([]byte, error) {

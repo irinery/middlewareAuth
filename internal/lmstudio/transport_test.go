@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/irinery/middlewareAuth/internal/codex"
+	"github.com/irinery/middlewareAuth/internal/security"
 )
 
 func TestTransportListModelsAndSendResponse(t *testing.T) {
@@ -119,5 +122,52 @@ func TestTransportParsesMislabelledSSEAndKeepsMetadata(t *testing.T) {
 	}
 	if response.OutputText != "ok lmstudio" || response.ResponseID != "chatcmpl-1" || response.Usage.TotalTokens != 5 {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestTransportMapsProviderStatusWithoutLeakingBody(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		status     int
+		wantCode   string
+		wantStatus int
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, wantCode: "ERR_LMSTUDIO_AUTH_REJECTED", wantStatus: http.StatusUnauthorized},
+		{name: "bad-request", status: http.StatusBadRequest, wantCode: "ERR_LMSTUDIO_REQUEST_INVALID", wantStatus: http.StatusBadRequest},
+		{name: "rate-limit", status: http.StatusTooManyRequests, wantCode: "ERR_LMSTUDIO_RATE_LIMITED", wantStatus: http.StatusTooManyRequests},
+		{name: "server-error", status: http.StatusInternalServerError, wantCode: "ERR_LMSTUDIO_HTTP_FAILED", wantStatus: http.StatusBadGateway},
+		{name: "gateway-timeout", status: http.StatusGatewayTimeout, wantCode: "ERR_LMSTUDIO_TIMEOUT", wantStatus: http.StatusGatewayTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const canary = "provider-body-api-key-canary"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(`{"api_key":"` + canary + `"}`))
+			}))
+			defer server.Close()
+
+			_, err := NewTransport(server.Client()).ListModels(context.Background(), server.URL, "local-api-key")
+			if security.Code(err) != test.wantCode || security.StatusCode(err) != test.wantStatus {
+				t.Fatalf("error=%v code=%s status=%d", err, security.Code(err), security.StatusCode(err))
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Fatalf("erro vazou corpo do provider: %v", err)
+			}
+		})
+	}
+}
+
+func TestTransportMapsNetworkTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	client := server.Client()
+	client.Timeout = 10 * time.Millisecond
+	_, err := NewTransport(client).ListModels(context.Background(), server.URL, "local-api-key")
+	if security.Code(err) != "ERR_LMSTUDIO_TIMEOUT" || security.StatusCode(err) != http.StatusGatewayTimeout {
+		t.Fatalf("error=%v code=%s status=%d", err, security.Code(err), security.StatusCode(err))
 	}
 }
