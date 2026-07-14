@@ -1,8 +1,12 @@
 # middlewareAuth
 
-Middleware Go para centralizar autenticacao OpenAI/Codex via OAuth, persistir perfis por projeto e expor uma API interna para outros softwares consumirem sem lidar com refresh token.
+Middleware Go independente para centralizar autenticacao, persistir perfis por
+projeto e expor providers LLM por uma API HTTP/MCP normalizada. Aplicacoes
+consumidoras nao precisam conhecer refresh token, API key ou protocolo nativo
+dos providers.
 
-O desenho segue os contratos em `/Users/irinery/Downloads/middleware`, inspirado conceitualmente no OpenClaw, mas sem runtime Node/TypeScript.
+O contrato canonico e versionado neste repositorio em
+[docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md).
 
 ## Estado atual
 
@@ -22,7 +26,7 @@ Implementado:
 ```sh
 export MIDDLEWARE_SECRET_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 export MIDDLEWARE_CLIENT_TOKEN="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
-export MIDDLEWARE_STATE_DIR='/Users/irinery/Documents/middlewareAuth/.middleware-state'
+export MIDDLEWARE_STATE_DIR="$PWD/.middleware-state"
 export HTTP_BIND_ADDR='127.0.0.1'
 export HTTP_PORT=18787
 ```
@@ -38,11 +42,11 @@ Por default o servidor escuta so em `127.0.0.1`; para expor em rede, configure `
 Terminal 1: exporte as variaveis e suba o servidor HTTP local.
 
 ```sh
-cd /Users/irinery/Documents/middlewareAuth
+cd /caminho/para/middlewareAuth
 
 export MIDDLEWARE_SECRET_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 export MIDDLEWARE_CLIENT_TOKEN="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
-export MIDDLEWARE_STATE_DIR='/Users/irinery/Documents/middlewareAuth/.middleware-state'
+export MIDDLEWARE_STATE_DIR="$PWD/.middleware-state"
 export HTTP_BIND_ADDR='127.0.0.1'
 export HTTP_PORT=18787
 
@@ -163,10 +167,7 @@ curl -s \
 sh ./scripts/check-no-secrets.sh
 jq empty ./docs/examples/llm-http-payloads.json
 shellcheck -s sh ./scripts/e2e-live-lmstudio.sh
-go test ./...
-go test -race ./...
-go build ./cmd/middleware-codex-oauth
-go build ./cmd/middleware-codex-oauth-mcp
+./scripts/verify.sh
 ```
 
 ## MCP

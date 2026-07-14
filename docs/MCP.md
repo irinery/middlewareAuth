@@ -145,7 +145,7 @@ Exemplo de config para clientes MCP locais:
 {
   "mcpServers": {
     "middleware-auth": {
-      "command": "/Users/irinery/Documents/middlewareAuth/bin/middleware-codex-oauth-mcp",
+      "command": "/caminho/absoluto/middlewareAuth/bin/middleware-codex-oauth-mcp",
       "env": {
         "MIDDLEWARE_BASE_URL": "http://localhost:18787",
         "MIDDLEWARE_CLIENT_TOKEN": "<token gerado para o middleware>",
