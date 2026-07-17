@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/irinery/middlewareAuth/internal/auth"
 	"github.com/irinery/middlewareAuth/internal/codex"
@@ -283,6 +284,27 @@ func TestLLMResponsesNormalizesProviderFailuresWithoutLeakingCause(t *testing.T)
 func TestLLMLoginStatusNormalizesSessionErrors(t *testing.T) {
 	handler := testHandler(t)
 	if err := handler.addSession(loginSession{
+		LoginSessionID: "pending-session",
+		ProjectID:      "pockettrace",
+		ProfileID:      "default",
+		Mode:           "device_code",
+		Status:         "pending",
+		ExpiresAt:      time.Now().Add(time.Minute).UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.addSession(loginSession{
+		LoginSessionID: "failed-session",
+		ProjectID:      "pockettrace",
+		ProfileID:      "default",
+		Mode:           "device_code",
+		Status:         "failed",
+		ExpiresAt:      time.Now().Add(time.Minute).UnixMilli(),
+		Error:          security.NewError("ERR_DEVICE_CODE_EXCHANGE_FAILED", "detalhe secreto do provider", http.StatusBadGateway),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.addSession(loginSession{
 		LoginSessionID: "expired-session",
 		ProjectID:      "pockettrace",
 		ProfileID:      "default",
@@ -292,6 +314,42 @@ func TestLLMLoginStatusNormalizesSessionErrors(t *testing.T) {
 		Error:          security.NewError("ERR_LOGIN_SESSION_EXPIRED", "erro interno do fluxo", http.StatusGone),
 	}); err != nil {
 		t.Fatal(err)
+	}
+
+	pendingReq := httptest.NewRequest(http.MethodGet, "/v1/projects/pockettrace/llm/login-sessions/pending-session?providerId=openai&profileId=default", nil)
+	pendingReq.Header.Set("Authorization", "Bearer "+handlerTestToken)
+	pendingRec := httptest.NewRecorder()
+	handler.ServeHTTP(pendingRec, pendingReq)
+	if pendingRec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", pendingRec.Code, pendingRec.Body.String())
+	}
+	var pendingResponse LLMLoginResponse
+	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingResponse); err != nil {
+		t.Fatal(err)
+	}
+	if pendingResponse.Status != "pending" || pendingResponse.Error != nil {
+		t.Fatalf("response = %#v", pendingResponse)
+	}
+
+	failedReq := httptest.NewRequest(http.MethodGet, "/v1/projects/pockettrace/llm/login-sessions/failed-session?providerId=openai&profileId=default", nil)
+	failedReq.Header.Set("Authorization", "Bearer "+handlerTestToken)
+	failedRec := httptest.NewRecorder()
+	handler.ServeHTTP(failedRec, failedReq)
+	if failedRec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", failedRec.Code, failedRec.Body.String())
+	}
+	var failedResponse LLMLoginResponse
+	if err := json.Unmarshal(failedRec.Body.Bytes(), &failedResponse); err != nil {
+		t.Fatal(err)
+	}
+	if failedResponse.Status != "failed" || failedResponse.Error == nil || failedResponse.Error.Code != "ERR_LLM_PROVIDER_UNAVAILABLE" {
+		t.Fatalf("response = %#v", failedResponse)
+	}
+	if failedResponse.Error.Message != "OpenAI recusou a confirmacao do login por device-code" {
+		t.Fatalf("message = %q", failedResponse.Error.Message)
+	}
+	if stringsContainAny(failedRec.Body.String(), "ERR_DEVICE_CODE_EXCHANGE_FAILED", "detalhe secreto do provider") {
+		t.Fatalf("resposta vazou erro interno: %s", failedRec.Body.String())
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/projects/pockettrace/llm/login-sessions/expired-session?providerId=openai&profileId=default", nil)

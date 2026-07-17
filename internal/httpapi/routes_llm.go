@@ -446,7 +446,7 @@ func writeLLMError(w http.ResponseWriter, err error) {
 	writeError(w, normalizeLLMError(err))
 }
 
-func publicLLMError(err error) *security.AppError {
+func publicLLMError(err *security.AppError) *security.AppError {
 	if err == nil {
 		return nil
 	}
@@ -471,6 +471,14 @@ func normalizeLLMError(err error) error {
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "timeout ao chamar provider LLM", http.StatusGatewayTimeout)
 	case "ERR_CONTEXT_CANCELLED":
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "request LLM cancelado", http.StatusRequestTimeout)
+	case "ERR_DEVICE_CODE_REQUEST_FAILED":
+		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "OpenAI recusou o inicio do login por device-code", http.StatusBadGateway)
+	case "ERR_DEVICE_CODE_EXCHANGE_FAILED":
+		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "OpenAI recusou a confirmacao do login por device-code", http.StatusBadGateway)
+	case "ERR_DEVICE_CODE_RESPONSE_INVALID":
+		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "OpenAI retornou resposta invalida no login por device-code", http.StatusBadGateway)
+	case "ERR_TOKEN_EXCHANGE_FAILED", "ERR_TOKEN_RESPONSE_INVALID":
+		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "OpenAI recusou a troca final do login por token", http.StatusBadGateway)
 	case "ERR_INVALID_JSON", "ERR_PAYLOAD_TOO_LARGE", "ERR_INVALID_PROFILE_ID", "ERR_INVALID_PROVIDER_ID",
 		"ERR_CODEX_REQUEST_INVALID", "ERR_LMSTUDIO_REQUEST_INVALID", "ERR_LMSTUDIO_BASE_URL_INVALID", "ERR_LMSTUDIO_API_KEY_REQUIRED":
 		return security.NewError("ERR_LLM_REQUEST_INVALID", security.Public(err).Message, security.StatusCode(err))

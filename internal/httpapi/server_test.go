@@ -278,7 +278,7 @@ func TestDeviceCodeFailureMarksSessionFailed(t *testing.T) {
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/accounts/deviceauth/usercode":
-			_, _ = w.Write([]byte(`{"device_authorization_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
+			_, _ = w.Write([]byte(`{"device_auth_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
 		case "/api/accounts/deviceauth/token":
 			http.Error(w, "boom", http.StatusInternalServerError)
 		default:
@@ -298,11 +298,34 @@ func TestDeviceCodeFailureMarksSessionFailed(t *testing.T) {
 }
 
 func TestDeviceCodeSuccessMarksSessionCompleted(t *testing.T) {
-	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var authServer *httptest.Server
+	authServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/accounts/deviceauth/usercode":
-			_, _ = w.Write([]byte(`{"device_authorization_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
+			_, _ = w.Write([]byte(`{"device_auth_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
 		case "/api/accounts/deviceauth/token":
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["device_auth_id"] != "dev-1" || payload["user_code"] != "ABCD" {
+				t.Fatalf("poll payload = %#v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"authorization_code": "authorization-code",
+				"code_challenge":     "provider-code-challenge",
+				"code_verifier":      "provider-code-verifier",
+			})
+		case "/oauth/token":
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if r.Form.Get("code_verifier") != "provider-code-verifier" {
+				t.Fatalf("code verifier = %q", r.Form.Get("code_verifier"))
+			}
+			if r.Form.Get("redirect_uri") != authServer.URL+"/deviceauth/callback" {
+				t.Fatalf("redirect URI = %q", r.Form.Get("redirect_uri"))
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  jwtToken(map[string]any{"sub": "device-user-1"}),
 				"refresh_token": "refresh-device",
@@ -335,7 +358,7 @@ func TestDeviceCodeTimeoutMarksSessionExpired(t *testing.T) {
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/accounts/deviceauth/usercode":
-			_, _ = w.Write([]byte(`{"device_authorization_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
+			_, _ = w.Write([]byte(`{"device_auth_id":"dev-1","user_code":"ABCD","verification_uri":"https://auth.openai.com/codex/device","interval_ms":1,"expires_in_ms":1000}`))
 		case "/api/accounts/deviceauth/token":
 			http.Error(w, "pending", http.StatusForbidden)
 		default:
