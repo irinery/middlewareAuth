@@ -133,7 +133,10 @@ func PollDeviceCode(ctx context.Context, client *http.Client, cfg config.OAuthCo
 }
 
 func pollDeviceOnce(ctx context.Context, client *http.Client, cfg config.OAuthConfig, device RequestedDeviceCode) (*OAuthCredentials, bool, error) {
-	payload := map[string]string{"device_authorization_id": device.DeviceAuthID, "client_id": cfg.ClientID}
+	payload := map[string]string{
+		"device_auth_id": device.DeviceAuthID,
+		"user_code":      device.UserCode,
+	}
 	body, _ := json.Marshal(payload)
 	url := strings.TrimRight(cfg.AuthBaseURL, "/") + "/api/accounts/deviceauth/token"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -170,11 +173,12 @@ func pollDeviceOnce(ctx context.Context, client *http.Client, cfg config.OAuthCo
 	if code == "" {
 		return nil, false, security.NewError("ERR_DEVICE_CODE_RESPONSE_INVALID", "resposta device-code sem authorization_code", http.StatusBadGateway)
 	}
-	flow, err := CreateAuthorizationFlow(ctx, cfg, "middleware-codex-oauth")
-	if err != nil {
-		return nil, false, err
+	verifier := firstString(parsed, "code_verifier", "codeVerifier")
+	if verifier == "" {
+		return nil, false, security.NewError("ERR_DEVICE_CODE_RESPONSE_INVALID", "resposta device-code sem code_verifier", http.StatusBadGateway)
 	}
-	credentials, err := ExchangeAuthorizationCode(ctx, client, cfg, code, flow.Verifier, flow.RedirectURI)
+	redirectURI := strings.TrimRight(cfg.AuthBaseURL, "/") + "/deviceauth/callback"
+	credentials, err := ExchangeAuthorizationCode(ctx, client, cfg, code, verifier, redirectURI)
 	return credentials, false, err
 }
 
