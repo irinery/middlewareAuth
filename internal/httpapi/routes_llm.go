@@ -612,7 +612,13 @@ func normalizeLLMError(err error) error {
 	case "ERR_LLM_PROVIDER_UNKNOWN", "ERR_LLM_REQUEST_INVALID", "ERR_LLM_REFRESH_UNSUPPORTED":
 		return err
 	case "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED":
-		return llmcontract.UnsupportedOutputContract()
+		normalized := llmcontract.UnsupportedOutputContract()
+		for _, detail := range security.Public(err).Details {
+			if detail.Field == "provider_reason" && llmcontract.IsSafeOutputContractReason(detail.Reason) {
+				return security.WithDetail(normalized, detail.Field, detail.Reason)
+			}
+		}
+		return normalized
 	case "ERR_AUTH_PROFILE_NOT_FOUND", "ERR_CODEX_ACCOUNT_ID_MISSING":
 		return security.NewError("ERR_LLM_AUTH_REQUIRED", "autenticacao do provider necessaria", http.StatusUnauthorized)
 	case "ERR_CODEX_AUTH_REJECTED", "ERR_LMSTUDIO_AUTH_REJECTED":

@@ -347,7 +347,7 @@ Request:
 }
 ```
 
-`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning`, `serviceTier`, `outputContract` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O middleware converte `serviceTier` para o campo provider-specific `service_tier`. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
+`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning`, `serviceTier`, `max_output_tokens`, `outputContract` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O middleware converte `serviceTier` para o campo provider-specific `service_tier`. `max_output_tokens` e um limite portatil: o adapter o encaminha somente quando o wire do provider oferece esse controle; no endpoint Codex autenticado ele e consumido e omitido porque o upstream nao aceita esse parametro. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
 
 ### Output contract portavel
 

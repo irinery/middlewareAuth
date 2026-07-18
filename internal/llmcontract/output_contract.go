@@ -93,8 +93,27 @@ func SchemaHash(schema json.RawMessage) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func UnsupportedOutputContract() error {
+func UnsupportedOutputContract() *security.AppError {
 	return security.NewError("ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED", "provider ou modelo nao suporta outputContract", http.StatusUnprocessableEntity)
+}
+
+func UnsupportedOutputContractWithReason(reason string) error {
+	err := UnsupportedOutputContract()
+	if !IsSafeOutputContractReason(reason) {
+		return err
+	}
+	return security.WithDetail(err, "provider_reason", reason)
+}
+
+func IsSafeOutputContractReason(reason string) bool {
+	switch reason {
+	case "empty_output", "fenced_output", "invalid_json_output", "root_not_object",
+		"text_format", "response_format", "json_schema", "schema", "max_output_tokens",
+		"tools", "include", "provider_code", "request_rejected":
+		return true
+	default:
+		return false
+	}
 }
 
 // ProviderSchemaName converts the stable contract ID to the conservative name
@@ -147,12 +166,18 @@ func ProviderJSONSchema(contract *OutputContract) (json.RawMessage, error) {
 // consumer's responsibility.
 func NormalizeStructuredOutputText(outputText string) (string, error) {
 	trimmed := strings.TrimSpace(outputText)
-	if trimmed == "" || !json.Valid([]byte(trimmed)) {
-		return "", UnsupportedOutputContract()
+	if trimmed == "" {
+		return "", UnsupportedOutputContractWithReason("empty_output")
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		return "", UnsupportedOutputContractWithReason("fenced_output")
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return "", UnsupportedOutputContractWithReason("invalid_json_output")
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(trimmed), &object); err != nil || object == nil {
-		return "", UnsupportedOutputContract()
+		return "", UnsupportedOutputContractWithReason("root_not_object")
 	}
 	return trimmed, nil
 }

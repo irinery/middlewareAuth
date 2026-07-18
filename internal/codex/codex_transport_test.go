@@ -46,7 +46,7 @@ func TestMarshalCodexWireRequestTranslatesOutputContract(t *testing.T) {
 			Strict:     true,
 			JSONSchema: publicSchema,
 		},
-		Extra: map[string]any{"text": "must-not-override"},
+		Extra: map[string]any{"text": "must-not-override", "max_output_tokens": float64(12000)},
 	}
 	raw, err := marshalCodexWireRequest(request, CodexTransportOptions{})
 	if err != nil {
@@ -73,6 +73,9 @@ func TestMarshalCodexWireRequestTranslatesOutputContract(t *testing.T) {
 	}
 	if _, exists := body["outputContract"]; exists || bytes.Contains(raw, []byte("schemaHash")) {
 		t.Fatalf("portable metadata leaked to Codex wire: %s", raw)
+	}
+	if _, exists := body["max_output_tokens"]; exists {
+		t.Fatalf("unsupported portable budget leaked to Codex wire: %s", raw)
 	}
 }
 
@@ -149,6 +152,67 @@ func TestCodexOutputContractReturnsOnlyBareJSONObject(t *testing.T) {
 				t.Fatalf("response=%#v err=%v", response, err)
 			}
 		})
+	}
+}
+
+func TestCollectOutputTextFallsBackToStructuredCompletionEvents(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []CodexStreamEvent
+	}{
+		{
+			name: "output text done",
+			events: []CodexStreamEvent{{
+				Type:    "response.output_text.done",
+				Payload: `{"type":"response.output_text.done","text":"{\"summary\":\"ok\"}"}`,
+			}},
+		},
+		{
+			name: "response completed",
+			events: []CodexStreamEvent{{
+				Type: "response.completed",
+				Payload: `{"type":"response.completed","response":{"output":[{"type":"message","content":[` +
+					`{"type":"output_text","text":"{\"summary\":\"ok\"}"}]}]}}`,
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := collectOutputText(test.events); got != `{"summary":"ok"}` {
+				t.Fatalf("collectOutputText() = %q", got)
+			}
+		})
+	}
+}
+
+func TestReadUpstreamErrorSupportsTopLevelDetail(t *testing.T) {
+	code, message := readUpstreamError(strings.NewReader(`{"detail":"Unsupported parameter: text.format"}`))
+	if code != "" || message != "Unsupported parameter: text.format" {
+		t.Fatalf("code=%q message=%q", code, message)
+	}
+}
+
+func TestReadUpstreamErrorClassifiesNonJSONWithoutReturningBody(t *testing.T) {
+	code, message := readUpstreamError(strings.NewReader(`invalid request containing text.format and secret-canary`))
+	if code != "" || message != "text.format" {
+		t.Fatalf("code=%q message=%q", code, message)
+	}
+}
+
+func TestCodexUsageLimitReturnedAsHTTP400IsRateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("You've hit your usage limit. Purchase more credits."))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 1000}, server.Client())
+	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account"}, CodexResponseRequest{
+		Model: "gpt-5.6-terra",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+	}, CodexTransportOptions{})
+	if security.Code(err) != "ERR_CODEX_RATE_LIMITED" || security.StatusCode(err) != http.StatusTooManyRequests {
+		t.Fatalf("err=%v code=%s status=%d", err, security.Code(err), security.StatusCode(err))
 	}
 }
 
