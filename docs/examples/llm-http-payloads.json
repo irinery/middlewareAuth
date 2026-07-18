@@ -40,7 +40,7 @@
   "providers": {
     "request": {
       "method": "GET",
-      "path": "/v1/projects/pockettrace/llm/providers"
+      "path": "/v1/projects/pockettrace/llm/providers?profileId=default"
     },
     "response": {
       "contractVersion": "middlewareauth.llm.v1",
@@ -56,17 +56,66 @@
           },
           "defaults": {
             "profileId": "default",
-            "model": "gpt-5.5"
+            "model": "gpt-5.6-sol"
           },
           "models": [
-            { "id": "gpt-5.5", "title": "gpt-5.5" },
-            { "id": "gpt-5", "title": "gpt-5" }
+            {
+              "id": "gpt-5.6-sol",
+              "title": "GPT-5.6-Sol",
+              "description": "Latest frontier agentic coding model.",
+              "defaultReasoningEffort": "low",
+              "reasoningEfforts": [
+                { "id": "low", "title": "low" },
+                { "id": "medium", "title": "medium" },
+                { "id": "high", "title": "high" },
+                { "id": "xhigh", "title": "xhigh" },
+                { "id": "max", "title": "max" },
+                { "id": "ultra", "title": "ultra" }
+              ],
+              "serviceTiers": [
+                { "id": "priority", "title": "Fast", "description": "1.5x speed, increased usage" }
+              ]
+            },
+            {
+              "id": "gpt-5.6-terra",
+              "title": "GPT-5.6-Terra",
+              "description": "Balanced agentic coding model for everyday work.",
+              "defaultReasoningEffort": "medium",
+              "reasoningEfforts": [
+                { "id": "low", "title": "low" },
+                { "id": "medium", "title": "medium" },
+                { "id": "high", "title": "high" },
+                { "id": "xhigh", "title": "xhigh" },
+                { "id": "max", "title": "max" },
+                { "id": "ultra", "title": "ultra" }
+              ],
+              "serviceTiers": [
+                { "id": "priority", "title": "Fast", "description": "1.5x speed, increased usage" }
+              ]
+            },
+            {
+              "id": "gpt-5.6-luna",
+              "title": "GPT-5.6-Luna",
+              "description": "Fast and affordable agentic coding model.",
+              "defaultReasoningEffort": "medium",
+              "reasoningEfforts": [
+                { "id": "low", "title": "low" },
+                { "id": "medium", "title": "medium" },
+                { "id": "high", "title": "high" },
+                { "id": "xhigh", "title": "xhigh" },
+                { "id": "max", "title": "max" }
+              ],
+              "serviceTiers": [
+                { "id": "priority", "title": "Fast", "description": "1.5x speed, increased usage" }
+              ]
+            }
           ],
           "capabilities": {
             "stream": true,
             "refresh": true,
             "intelligence": true,
             "reasoningEffort": true,
+            "serviceTier": true,
             "systemInstructions": true,
             "tools": false,
             "store": true
@@ -106,6 +155,7 @@
             "refresh": false,
             "intelligence": false,
             "reasoningEffort": false,
+            "serviceTier": false,
             "systemInstructions": true,
             "tools": false,
             "store": false
@@ -262,7 +312,7 @@
       "body": {
         "providerId": "openai",
         "profileId": "default",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "instructions": "Responda de forma objetiva.",
         "input": [
           { "role": "user", "content": "Responda apenas: ok" }
@@ -270,6 +320,7 @@
         "stream": true,
         "store": false,
         "intelligence": "thinking",
+        "serviceTier": "priority",
         "reasoning": {
           "effort": "medium",
           "summary": "auto"
@@ -336,7 +387,7 @@
     "responseRule": "result.content[0].text contem o JSON do mesmo contrato HTTP",
     "tools": {
       "llm_providers": {
-        "arguments": { "projectId": "pockettrace" }
+        "arguments": { "projectId": "pockettrace", "profileId": "default" }
       },
       "llm_login_start": {
         "arguments": {
@@ -377,7 +428,8 @@
           "providerId": "openai",
           "projectId": "pockettrace",
           "profileId": "default",
-          "model": "gpt-5.5",
+          "model": "gpt-5.6-sol",
+          "serviceTier": "priority",
           "input": "Responda apenas: ok",
           "stream": true,
           "store": false

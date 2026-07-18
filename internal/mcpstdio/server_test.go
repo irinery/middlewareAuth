@@ -163,6 +163,9 @@ func TestLLMProvidersListsOpenAI(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/projects/acme/llm/providers" {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
+		if r.URL.Query().Get("profileId") != "work" {
+			t.Fatalf("profileId = %q", r.URL.Query().Get("profileId"))
+		}
 		if r.Header.Get("Authorization") != "Bearer "+mcpTestToken {
 			t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 		}
@@ -177,7 +180,7 @@ func TestLLMProvidersListsOpenAI(t *testing.T) {
 	defer httpServer.Close()
 
 	server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
-	text, isErr := server.callTool(context.Background(), "llm_providers", map[string]any{"projectId": "acme"})
+	text, isErr := server.callTool(context.Background(), "llm_providers", map[string]any{"projectId": "acme", "profileId": "work"})
 	if isErr {
 		t.Fatalf("llm_providers error: %s", text)
 	}
@@ -326,6 +329,9 @@ func TestLLMResponsesUsesGenericHTTPContract(t *testing.T) {
 		if body["futureSelector"] != "next" {
 			t.Fatalf("futureSelector = %#v", body["futureSelector"])
 		}
+		if body["service_tier"] != "priority" {
+			t.Fatalf("service_tier = %#v", body["service_tier"])
+		}
 		_, _ = w.Write([]byte(`{"events":[{"type":"response.output_text.delta","payload":"{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}"}],"outputText":"ok pocketwiki"}`))
 	}))
 	defer httpServer.Close()
@@ -339,6 +345,7 @@ func TestLLMResponsesUsesGenericHTTPContract(t *testing.T) {
 		"input":           "oi",
 		"intelligence":    "Thinking",
 		"reasoningEffort": "Estendido",
+		"serviceTier":     "priority",
 		"extra":           map[string]any{"futureSelector": "next", "model": "ignored"},
 	})
 	if isErr {

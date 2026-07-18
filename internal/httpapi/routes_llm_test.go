@@ -40,6 +40,18 @@ type errorCodexSender struct {
 	err error
 }
 
+type catalogCodexSender struct {
+	models []codex.CodexModelInfo
+}
+
+func (s catalogCodexSender) SendCodexResponse(context.Context, auth.StoredOAuthCredential, codex.CodexResponseRequest, codex.CodexTransportOptions) (*codex.CodexResponseStream, error) {
+	return &codex.CodexResponseStream{}, nil
+}
+
+func (s catalogCodexSender) ListCodexModels(context.Context, auth.StoredOAuthCredential) ([]codex.CodexModelInfo, error) {
+	return s.models, nil
+}
+
 func (s errorCodexSender) SendCodexResponse(context.Context, auth.StoredOAuthCredential, codex.CodexResponseRequest, codex.CodexTransportOptions) (*codex.CodexResponseStream, error) {
 	return nil, s.err
 }
@@ -71,6 +83,12 @@ func TestLLMProvidersExposesCanonicalBlackBoxContract(t *testing.T) {
 	if !response.Providers[0].Capabilities.Intelligence || response.Providers[1].Capabilities.Intelligence {
 		t.Fatalf("intelligence capabilities = %#v", response.Providers)
 	}
+	if !response.Providers[0].Capabilities.ServiceTier || response.Providers[1].Capabilities.ServiceTier {
+		t.Fatalf("service tier capabilities = %#v", response.Providers)
+	}
+	if len(response.Providers[0].Models) != 3 || response.Providers[0].Models[0].ID != "gpt-5.6-sol" {
+		t.Fatalf("OpenAI fallback models = %#v", response.Providers[0].Models)
+	}
 	if !response.Providers[0].Capabilities.Store || response.Providers[1].Capabilities.Store {
 		t.Fatalf("store capabilities = %#v", response.Providers)
 	}
@@ -79,6 +97,46 @@ func TestLLMProvidersExposesCanonicalBlackBoxContract(t *testing.T) {
 	}
 	if stringsContainAny(rec.Body.String(), "accessToken", "refreshToken", `"apiKey":"`) {
 		t.Fatalf("catalog leaked credential fields: %s", rec.Body.String())
+	}
+}
+
+func TestLLMProvidersDiscoversAccountModelsAndSelectors(t *testing.T) {
+	handler := testHandler(t)
+	handler.codex = catalogCodexSender{models: []codex.CodexModelInfo{
+		{Slug: "internal-hidden", DisplayName: "Internal", Visibility: "hide", SupportedInAPI: true, Priority: 0},
+		{
+			Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Fast", Visibility: "list", SupportedInAPI: true, Priority: 3,
+			DefaultReasoningLevel:    "medium",
+			SupportedReasoningLevels: []codex.CodexReasoningEffortOption{{Effort: "low", Description: "Fast responses"}, {Effort: "max", Description: "Maximum reasoning"}},
+			ServiceTiers:             []codex.CodexServiceTier{{ID: "priority", Name: "Fast", Description: "1.5x speed"}},
+		},
+		{Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Visibility: "list", SupportedInAPI: true, Priority: 1, DefaultReasoningLevel: "low"},
+		{Slug: "not-supported", DisplayName: "No", Visibility: "list", SupportedInAPI: false, Priority: 2},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/projects/pockettrace/llm/providers?profileId=work", nil)
+	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response LLMProviderCatalogResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	openAI := response.Providers[0]
+	if openAI.Defaults.ProfileID != "work" || openAI.Defaults.Model != "gpt-5.6-sol" {
+		t.Fatalf("defaults = %#v", openAI.Defaults)
+	}
+	if len(openAI.Models) != 2 || openAI.Models[0].ID != "gpt-5.6-sol" || openAI.Models[1].ID != "gpt-5.6-luna" {
+		t.Fatalf("models = %#v", openAI.Models)
+	}
+	luna := openAI.Models[1]
+	if luna.DefaultReasoningEffort != "medium" || len(luna.ReasoningEfforts) != 2 || luna.ReasoningEfforts[1].ID != "max" {
+		t.Fatalf("reasoning metadata = %#v", luna)
+	}
+	if len(luna.ServiceTiers) != 1 || luna.ServiceTiers[0].ID != "priority" || luna.ServiceTiers[0].Title != "Fast" {
+		t.Fatalf("service tiers = %#v", luna.ServiceTiers)
 	}
 }
 
@@ -142,6 +200,8 @@ func TestLLMResponsesDispatchesInternallyWithoutControlFieldsReachingProvider(t 
 		"input":[{"role":"user","content":"oi"}],
 		"stream":false,
 		"store":false,
+		"serviceTier":" priority ",
+		"service_tier":"flex",
 		"max_output_tokens":12000
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/pockettrace/llm/responses", bytes.NewBufferString(body))
@@ -164,6 +224,12 @@ func TestLLMResponsesDispatchesInternallyWithoutControlFieldsReachingProvider(t 
 	}
 	if value, ok := sender.request.Extra["max_output_tokens"].(float64); !ok || value != 12000 {
 		t.Fatalf("max_output_tokens = %#v", sender.request.Extra["max_output_tokens"])
+	}
+	if sender.request.Extra["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v", sender.request.Extra["service_tier"])
+	}
+	if _, exists := sender.request.Extra["serviceTier"]; exists {
+		t.Fatalf("serviceTier leaked without normalization: %#v", sender.request.Extra)
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"outputText":"{\"summary\":\"ok\"}"`)) {
 		t.Fatalf("response = %s", rec.Body.String())

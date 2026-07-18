@@ -42,6 +42,8 @@ type OAuthConfig struct {
 type CodexConfig struct {
 	BaseURL             string
 	ResponsesPath       string
+	ModelsPath          string
+	ClientVersion       string
 	RequestTimeoutMs    int
 	MaxRetries          int
 	MaxIdleConns        int
@@ -98,6 +100,8 @@ func LoadConfig(ctx context.Context, env map[string]string) (*Config, error) {
 		Codex: CodexConfig{
 			BaseURL:             get(env, "OPENAI_CODEX_BASE_URL", "https://chatgpt.com/backend-api"),
 			ResponsesPath:       get(env, "OPENAI_CODEX_RESPONSES_PATH", "/codex/responses"),
+			ModelsPath:          get(env, "OPENAI_CODEX_MODELS_PATH", "/codex/models"),
+			ClientVersion:       get(env, "OPENAI_CODEX_CLIENT_VERSION", "0.145.0"),
 			RequestTimeoutMs:    getInt(env, "OPENAI_CODEX_REQUEST_TIMEOUT_MS", 30000),
 			MaxRetries:          getInt(env, "OPENAI_CODEX_MAX_RETRIES", 3),
 			MaxIdleConns:        getInt(env, "OPENAI_CODEX_MAX_IDLE_CONNS", 100),

@@ -57,7 +57,8 @@ parte do contrato.
 
 ## Valores provider-specific e metadata
 
-Valores de `models[].id`, `auth.modes[]`, descritores de `auth.fields`,
+Valores de `models[].id`, `models[].reasoningEfforts[]`,
+`models[].serviceTiers[]`, `auth.modes[]`, descritores de `auth.fields`,
 `model`, `accountId`, `baseUrl`, `email` e `planType` podem variar por provider.
 O cliente descobre esses valores pelo catalogo e nao deve codificar regras como
 `if providerId == "lmstudio"`.
@@ -73,7 +74,7 @@ emitir `metadata`.
 ## Catalogo
 
 ```http
-GET /v1/projects/{projectId}/llm/providers
+GET /v1/projects/{projectId}/llm/providers?profileId={profileId}
 ```
 
 Resposta:
@@ -93,17 +94,47 @@ Resposta:
       },
       "defaults": {
         "profileId": "default",
-        "model": "gpt-5.5"
+        "model": "gpt-5.6-sol"
       },
       "models": [
-        { "id": "gpt-5.5", "title": "gpt-5.5" },
-        { "id": "gpt-5", "title": "gpt-5" }
+        {
+          "id": "gpt-5.6-sol",
+          "title": "GPT-5.6-Sol",
+          "defaultReasoningEffort": "low",
+          "reasoningEfforts": [
+            { "id": "low", "title": "low" },
+            { "id": "medium", "title": "medium" },
+            { "id": "high", "title": "high" },
+            { "id": "xhigh", "title": "xhigh" },
+            { "id": "max", "title": "max" },
+            { "id": "ultra", "title": "ultra" }
+          ],
+          "serviceTiers": [
+            { "id": "priority", "title": "Fast", "description": "1.5x speed, increased usage" }
+          ]
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "title": "GPT-5.6-Luna",
+          "defaultReasoningEffort": "medium",
+          "reasoningEfforts": [
+            { "id": "low", "title": "low" },
+            { "id": "medium", "title": "medium" },
+            { "id": "high", "title": "high" },
+            { "id": "xhigh", "title": "xhigh" },
+            { "id": "max", "title": "max" }
+          ],
+          "serviceTiers": [
+            { "id": "priority", "title": "Fast", "description": "1.5x speed, increased usage" }
+          ]
+        }
       ],
       "capabilities": {
         "stream": true,
         "refresh": true,
         "intelligence": true,
         "reasoningEffort": true,
+        "serviceTier": true,
         "systemInstructions": true,
         "tools": false,
         "store": true
@@ -113,7 +144,7 @@ Resposta:
 }
 ```
 
-A UI deve derivar os controles de `auth`, `auth.fields`, `defaults`, `models` e `capabilities`; nao deve condicionar comportamento ao nome do provider. Um field descreve `id`, `title`, `type`, `required` e `secret`. `models` pode estar vazio, especialmente para providers locais. Nesse caso, aceite um model informado pelo usuario.
+A UI deve derivar os controles de `auth`, `auth.fields`, `defaults`, `models` e `capabilities`; nao deve condicionar comportamento ao nome do provider. Um field descreve `id`, `title`, `type`, `required` e `secret`. Para cada model, `reasoningEfforts` publica as opcoes aceitas e `serviceTiers` publica modos adicionais como `Fast`. O catalogo OpenAI tenta buscar esses dados no backend usando o `profileId` autenticado e usa o catalogo local apenas como fallback. `models` pode estar vazio, especialmente para providers locais. Nesse caso, aceite um model informado pelo usuario.
 
 Semantica das capabilities:
 
@@ -123,6 +154,7 @@ Semantica das capabilities:
 | `refresh` | A UI pode exibir acao de refresh. |
 | `intelligence` | A UI pode enviar o seletor livre `intelligence`. |
 | `reasoningEffort` | A UI pode enviar `reasoning` ou o alias MCP `reasoningEffort`. |
+| `serviceTier` | A UI pode enviar um ID publicado em `models[].serviceTiers`; omitir usa o tier padrao. |
 | `systemInstructions` | A UI pode enviar `instructions`. |
 | `tools` | A UI pode enviar `tools`. |
 | `store` | A UI pode oferecer o controle `store`. |
@@ -259,7 +291,7 @@ Request:
 {
   "providerId": "openai",
   "profileId": "default",
-  "model": "gpt-5.5",
+  "model": "gpt-5.6-sol",
   "instructions": "Responda de forma objetiva.",
   "input": [
     { "role": "user", "content": "Responda apenas: ok" }
@@ -267,6 +299,7 @@ Request:
   "stream": true,
   "store": false,
   "intelligence": "thinking",
+  "serviceTier": "priority",
   "reasoning": {
     "effort": "medium",
     "summary": "auto"
@@ -274,7 +307,7 @@ Request:
 }
 ```
 
-`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
+`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning`, `serviceTier` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O middleware converte `serviceTier` para o campo provider-specific `service_tier`. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
 
 Resposta normalizada:
 

@@ -38,10 +38,66 @@ func SendCodexResponse(ctx context.Context, credential auth.StoredOAuthCredentia
 	cfg := config.CodexConfig{
 		BaseURL:          "https://chatgpt.com/backend-api",
 		ResponsesPath:    "/codex/responses",
+		ModelsPath:       "/codex/models",
+		ClientVersion:    "0.145.0",
 		RequestTimeoutMs: 30000,
 		MaxRetries:       3,
 	}
 	return NewTransport(cfg, config.NewHTTPClient(cfg)).SendCodexResponse(ctx, credential, request, options)
+}
+
+func (t *Transport) ListCodexModels(ctx context.Context, credential auth.StoredOAuthCredential) ([]CodexModelInfo, error) {
+	if ctx == nil {
+		return nil, security.NewError("ERR_CONTEXT_CANCELLED", "contexto ausente", http.StatusBadRequest)
+	}
+	if credential.Access == "" || credential.AccountID == "" {
+		return nil, security.NewError("ERR_CODEX_REQUEST_INVALID", "credencial Codex incompleta", http.StatusBadRequest)
+	}
+
+	timeoutMs := t.cfg.RequestTimeoutMs
+	if timeoutMs < 1000 {
+		timeoutMs = 1000
+	}
+	if timeoutMs > 300000 {
+		timeoutMs = 300000
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, ResolveCodexModelsURL(t.cfg.BaseURL, t.cfg.ModelsPath, t.cfg.ClientVersion), nil)
+	if err != nil {
+		return nil, security.Wrap("ERR_CODEX_HTTP_FAILED", "falha ao montar consulta de modelos Codex", http.StatusInternalServerError, err)
+	}
+	headers := BuildCodexHeaders(credential.Access, credential.AccountID, "middleware-codex-oauth", nil)
+	headers.Set("Accept", "application/json")
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	resp, err := t.client.Do(req)
+	if err != nil {
+		if reqCtx.Err() != nil {
+			return nil, mapContextErr(reqCtx.Err())
+		}
+		return nil, security.Wrap("ERR_CODEX_HTTP_FAILED", "falha HTTP ao consultar modelos Codex", http.StatusBadGateway, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, security.NewError("ERR_CODEX_AUTH_REJECTED", "Codex recusou autenticacao", http.StatusUnauthorized)
+		}
+		return nil, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex recusou consulta de modelos", http.StatusBadGateway)
+	}
+	raw, err := readLimitedResponse(resp.Body, maxResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	var result CodexModelsResponse
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, security.Wrap("ERR_CODEX_RESPONSE_INVALID", "catalogo de modelos Codex invalido", http.StatusBadGateway, err)
+	}
+	return result.Models, nil
 }
 
 func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.StoredOAuthCredential, request CodexResponseRequest, options CodexTransportOptions) (*CodexResponseStream, error) {
@@ -147,6 +203,28 @@ func ResolveCodexResponsesURL(baseURL string, responsesPath string) string {
 		responsePath = strings.TrimPrefix(responsePath, "/codex")
 	}
 	parsed.Path = basePath + responsePath
+	return parsed.String()
+}
+
+func ResolveCodexModelsURL(baseURL, modelsPath, clientVersion string) string {
+	if modelsPath == "" {
+		modelsPath = "/codex/models"
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return strings.TrimRight(baseURL, "/") + modelsPath
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	modelPath := "/" + strings.TrimLeft(modelsPath, "/")
+	if strings.HasSuffix(basePath, "/codex") && strings.HasPrefix(modelPath, "/codex/") {
+		modelPath = strings.TrimPrefix(modelPath, "/codex")
+	}
+	parsed.Path = basePath + modelPath
+	query := parsed.Query()
+	if clientVersion != "" {
+		query.Set("client_version", clientVersion)
+	}
+	parsed.RawQuery = query.Encode()
 	return parsed.String()
 }
 

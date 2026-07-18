@@ -228,8 +228,10 @@ func (s *Server) llmProviders(ctx context.Context, args map[string]any) (string,
 	if !ok {
 		return s.llmErrorText("ERR_LLM_REQUEST_INVALID", "projectId obrigatorio", "", "", ""), true
 	}
+	profileID := s.profileIDForProvider(args, "openai")
 	var response any
-	if err := s.doJSON(ctx, http.MethodGet, "/v1/projects/"+url.PathEscape(projectID)+"/llm/providers", nil, &response, true); err != nil {
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/llm/providers?profileId=" + url.QueryEscape(profileID)
+	if err := s.doJSON(ctx, http.MethodGet, path, nil, &response, true); err != nil {
 		return s.llmErrorFromError(err, "", projectID, ""), true
 	}
 	return marshalText(response), false
@@ -446,6 +448,9 @@ func (s *Server) llmResponses(ctx context.Context, args map[string]any) (string,
 	if reasoning := reasoningArg(args); len(reasoning) > 0 {
 		body["reasoning"] = reasoning
 	}
+	if serviceTier := strings.TrimSpace(stringArg(args, "serviceTier", "")); serviceTier != "" {
+		body["service_tier"] = serviceTier
+	}
 	if extra := objectArg(args, "extra"); len(extra) > 0 {
 		for key, value := range extra {
 			if _, exists := body[key]; exists {
@@ -661,7 +666,7 @@ func (s *Server) modelForProvider(args map[string]any, providerID string) string
 	if providerID == "lmstudio" {
 		return "local-model"
 	}
-	return "gpt-5.5"
+	return "gpt-5.6-sol"
 }
 
 func normalizeProviderID(providerID string) string {
@@ -957,6 +962,7 @@ func toolDefinitions() []map[string]any {
 			"description": "Lista providers LLM suportados e capacidades.",
 			"inputSchema": objectSchema(map[string]any{
 				"projectId": map[string]any{"type": "string"},
+				"profileId": map[string]any{"type": "string", "default": "default", "description": "Perfil OpenAI usado para descobrir os modelos liberados para a conta."},
 			}, []string{"projectId"}),
 		},
 		{
@@ -1010,8 +1016,9 @@ func toolDefinitions() []map[string]any {
 				"providerId":       map[string]any{"type": "string", "default": "openai"},
 				"projectId":        map[string]any{"type": "string"},
 				"profileId":        map[string]any{"type": "string", "default": "default"},
-				"model":            map[string]any{"type": "string", "default": "gpt-5.5", "description": "String livre provider-specific."},
+				"model":            map[string]any{"type": "string", "default": "gpt-5.6-sol", "description": "String livre provider-specific."},
 				"intelligence":     map[string]any{"type": "string", "description": "Nivel livre do backend. Exemplos atuais: instant, thinking."},
+				"serviceTier":      map[string]any{"type": "string", "description": "Tier publicado em llm_providers.models[].serviceTiers; priority ativa o modo Fast atual."},
 				"instructions":     map[string]any{"type": "string"},
 				"reasoningEffort":  map[string]any{"type": "string", "description": "Campo portavel; aliases: padrao -> medium, estendido -> high."},
 				"reasoningSummary": map[string]any{"type": "string", "description": "Resumo de raciocinio quando suportado pelo backend."},
@@ -1074,7 +1081,7 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": objectSchema(map[string]any{
 				"projectId":        map[string]any{"type": "string"},
 				"profileId":        map[string]any{"type": "string"},
-				"model":            map[string]any{"type": "string", "default": "gpt-5.5"},
+				"model":            map[string]any{"type": "string", "default": "gpt-5.6-sol"},
 				"intelligence":     map[string]any{"type": "string", "description": "Nivel livre do backend. Exemplos atuais: instant, thinking. Nao e enum rigido."},
 				"instructions":     map[string]any{"type": "string"},
 				"reasoningEffort":  map[string]any{"type": "string", "description": "Esforco livre ou alias: padrao -> medium, estendido -> high."},

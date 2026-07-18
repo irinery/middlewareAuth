@@ -24,6 +24,10 @@ type CodexSender interface {
 	SendCodexResponse(ctx context.Context, credential auth.StoredOAuthCredential, request codex.CodexResponseRequest, options codex.CodexTransportOptions) (*codex.CodexResponseStream, error)
 }
 
+type CodexModelLister interface {
+	ListCodexModels(ctx context.Context, credential auth.StoredOAuthCredential) ([]codex.CodexModelInfo, error)
+}
+
 type Handler struct {
 	cfg       config.Config
 	store     auth.ProfileStore

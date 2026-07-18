@@ -24,6 +24,34 @@ type CodexReasoningConfig struct {
 	Summary string `json:"summary,omitempty"`
 }
 
+type CodexReasoningEffortOption struct {
+	Effort      string `json:"effort"`
+	Description string `json:"description,omitempty"`
+}
+
+type CodexServiceTier struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type CodexModelInfo struct {
+	Slug                     string                       `json:"slug"`
+	DisplayName              string                       `json:"display_name"`
+	Description              string                       `json:"description,omitempty"`
+	DefaultReasoningLevel    string                       `json:"default_reasoning_level,omitempty"`
+	SupportedReasoningLevels []CodexReasoningEffortOption `json:"supported_reasoning_levels"`
+	Visibility               string                       `json:"visibility"`
+	SupportedInAPI           bool                         `json:"supported_in_api"`
+	Priority                 int                          `json:"priority"`
+	ServiceTiers             []CodexServiceTier           `json:"service_tiers,omitempty"`
+	DefaultServiceTier       string                       `json:"default_service_tier,omitempty"`
+}
+
+type CodexModelsResponse struct {
+	Models []CodexModelInfo `json:"models"`
+}
+
 type CodexToolDefinition struct {
 	Type        string `json:"type"`
 	Name        string `json:"name"`

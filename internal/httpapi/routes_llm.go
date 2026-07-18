@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/irinery/middlewareAuth/internal/codex"
@@ -50,8 +51,19 @@ type LLMProviderDefaults struct {
 }
 
 type LLMProviderModel struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID                     string              `json:"id"`
+	Title                  string              `json:"title"`
+	Description            string              `json:"description,omitempty"`
+	DefaultReasoningEffort string              `json:"defaultReasoningEffort,omitempty"`
+	ReasoningEfforts       []LLMProviderOption `json:"reasoningEfforts,omitempty"`
+	ServiceTiers           []LLMProviderOption `json:"serviceTiers,omitempty"`
+	DefaultServiceTier     string              `json:"defaultServiceTier,omitempty"`
+}
+
+type LLMProviderOption struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
 }
 
 type LLMProviderCapabilities struct {
@@ -59,6 +71,7 @@ type LLMProviderCapabilities struct {
 	Refresh            bool `json:"refresh"`
 	Intelligence       bool `json:"intelligence"`
 	ReasoningEffort    bool `json:"reasoningEffort"`
+	ServiceTier        bool `json:"serviceTier"`
 	SystemInstructions bool `json:"systemInstructions"`
 	Tools              bool `json:"tools"`
 	Store              bool `json:"store"`
@@ -108,20 +121,30 @@ type llmRefreshRequest struct {
 	ProfileID  string `json:"profileId"`
 }
 
-func (h *Handler) handleLLMProviders(w http.ResponseWriter, _ *http.Request, _ string) {
+func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, projectID string) {
+	profileID := strings.TrimSpace(r.URL.Query().Get("profileId"))
+	if profileID == "" {
+		profileID = "default"
+	}
+	if _, _, err := normalizeLLMIdentity(providerOpenAI, profileID); err != nil {
+		writeLLMError(w, err)
+		return
+	}
+	openAIModels := h.openAIModels(r.Context(), projectID, profileID)
+	defaultOpenAIModel := "gpt-5.6-sol"
+	if len(openAIModels) > 0 {
+		defaultOpenAIModel = openAIModels[0].ID
+	}
 	writeJSON(w, http.StatusOK, LLMProviderCatalogResponse{
 		ContractVersion: "middlewareauth.llm.v1",
 		Providers: []LLMProvider{
 			{
-				ID:       providerOpenAI,
-				Title:    "OpenAI",
-				Auth:     LLMProviderAuth{Required: true, Modes: []string{"oauth", "device_code"}, DefaultMode: "device_code", Fields: []LLMProviderAuthField{}},
-				Defaults: LLMProviderDefaults{ProfileID: "default", Model: "gpt-5.5"},
-				Models: []LLMProviderModel{
-					{ID: "gpt-5.5", Title: "gpt-5.5"},
-					{ID: "gpt-5", Title: "gpt-5"},
-				},
-				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: true, Intelligence: true, ReasoningEffort: true, SystemInstructions: true, Tools: false, Store: true},
+				ID:           providerOpenAI,
+				Title:        "OpenAI",
+				Auth:         LLMProviderAuth{Required: true, Modes: []string{"oauth", "device_code"}, DefaultMode: "device_code", Fields: []LLMProviderAuthField{}},
+				Defaults:     LLMProviderDefaults{ProfileID: profileID, Model: defaultOpenAIModel},
+				Models:       openAIModels,
+				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: true, Intelligence: true, ReasoningEffort: true, ServiceTier: true, SystemInstructions: true, Tools: false, Store: true},
 			},
 			{
 				ID:    providerLMStudio,
@@ -141,6 +164,103 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, _ *http.Request, _ s
 			},
 		},
 	})
+}
+
+func (h *Handler) openAIModels(ctx context.Context, projectID, profileID string) []LLMProviderModel {
+	fallback := defaultOpenAIModels()
+	lister, ok := h.codex.(CodexModelLister)
+	if !ok || h.refresher == nil {
+		return fallback
+	}
+	credential, err := h.refresher.ResolveFreshCredential(ctx, projectID, profileID, 60_000)
+	if err != nil {
+		return fallback
+	}
+	models, err := lister.ListCodexModels(ctx, *credential)
+	if err != nil {
+		h.logger.WarnContext(ctx, "codex_model_catalog_fallback", "error_code", security.Code(err), "project_id", projectID, "profile_id", profileID)
+		return fallback
+	}
+	normalized := normalizeOpenAIModels(models)
+	if len(normalized) == 0 {
+		return fallback
+	}
+	return normalized
+}
+
+func normalizeOpenAIModels(models []codex.CodexModelInfo) []LLMProviderModel {
+	type prioritizedModel struct {
+		model    LLMProviderModel
+		priority int
+	}
+	normalized := make([]prioritizedModel, 0, len(models))
+	for _, model := range models {
+		if strings.TrimSpace(model.Slug) == "" || model.Visibility != "list" || !model.SupportedInAPI {
+			continue
+		}
+		title := strings.TrimSpace(model.DisplayName)
+		if title == "" {
+			title = model.Slug
+		}
+		item := LLMProviderModel{
+			ID:                     model.Slug,
+			Title:                  title,
+			Description:            model.Description,
+			DefaultReasoningEffort: model.DefaultReasoningLevel,
+			DefaultServiceTier:     model.DefaultServiceTier,
+		}
+		for _, effort := range model.SupportedReasoningLevels {
+			if effort.Effort == "" {
+				continue
+			}
+			item.ReasoningEfforts = append(item.ReasoningEfforts, LLMProviderOption{ID: effort.Effort, Title: effort.Effort, Description: effort.Description})
+		}
+		for _, tier := range model.ServiceTiers {
+			if tier.ID == "" {
+				continue
+			}
+			title := tier.Name
+			if title == "" {
+				title = tier.ID
+			}
+			item.ServiceTiers = append(item.ServiceTiers, LLMProviderOption{ID: tier.ID, Title: title, Description: tier.Description})
+		}
+		normalized = append(normalized, prioritizedModel{model: item, priority: model.Priority})
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		if normalized[i].priority == normalized[j].priority {
+			return normalized[i].model.ID < normalized[j].model.ID
+		}
+		return normalized[i].priority < normalized[j].priority
+	})
+	result := make([]LLMProviderModel, 0, len(normalized))
+	for _, item := range normalized {
+		result = append(result, item.model)
+	}
+	return result
+}
+
+func defaultOpenAIModels() []LLMProviderModel {
+	fastTier := []LLMProviderOption{{ID: "priority", Title: "Fast", Description: "1.5x speed, increased usage"}}
+	return []LLMProviderModel{
+		openAIModelFallback("gpt-5.6-sol", "GPT-5.6-Sol", "Latest frontier agentic coding model.", "low", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, fastTier),
+		openAIModelFallback("gpt-5.6-terra", "GPT-5.6-Terra", "Balanced agentic coding model for everyday work.", "medium", []string{"low", "medium", "high", "xhigh", "max", "ultra"}, fastTier),
+		openAIModelFallback("gpt-5.6-luna", "GPT-5.6-Luna", "Fast and affordable agentic coding model.", "medium", []string{"low", "medium", "high", "xhigh", "max"}, fastTier),
+	}
+}
+
+func openAIModelFallback(id, title, description, defaultEffort string, efforts []string, serviceTiers []LLMProviderOption) LLMProviderModel {
+	model := LLMProviderModel{
+		ID:                     id,
+		Title:                  title,
+		Description:            description,
+		DefaultReasoningEffort: defaultEffort,
+		ServiceTiers:           append([]LLMProviderOption(nil), serviceTiers...),
+	}
+	for _, effort := range efforts {
+		model.ReasoningEfforts = append(model.ReasoningEfforts, LLMProviderOption{ID: effort, Title: effort})
+	}
+	return model
 }
 
 func (h *Handler) handleLLMLogin(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -412,6 +532,18 @@ func readLLMResponseRequest(w http.ResponseWriter, r *http.Request, maxBytes int
 	}
 	delete(raw, "providerId")
 	delete(raw, "profileId")
+	if value := raw["serviceTier"]; len(value) > 0 {
+		var serviceTier string
+		if err := json.Unmarshal(value, &serviceTier); err != nil || strings.TrimSpace(serviceTier) == "" || len(serviceTier) > 80 {
+			return "", "", codex.CodexResponseRequest{}, security.NewError("ERR_LLM_REQUEST_INVALID", "serviceTier invalido", http.StatusBadRequest)
+		}
+		normalized, err := json.Marshal(strings.TrimSpace(serviceTier))
+		if err != nil {
+			return "", "", codex.CodexResponseRequest{}, security.NewError("ERR_LLM_REQUEST_INVALID", "serviceTier invalido", http.StatusBadRequest)
+		}
+		raw["service_tier"] = normalized
+		delete(raw, "serviceTier")
+	}
 	payload, err := json.Marshal(raw)
 	if err != nil {
 		return "", "", codex.CodexResponseRequest{}, security.NewError("ERR_LLM_REQUEST_INVALID", "payload LLM invalido", http.StatusBadRequest)
