@@ -484,7 +484,13 @@ func normalizeLLMError(err error) error {
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "OpenAI recusou a troca final do login por token", http.StatusBadGateway)
 	case "ERR_INVALID_JSON", "ERR_PAYLOAD_TOO_LARGE", "ERR_INVALID_PROFILE_ID", "ERR_INVALID_PROVIDER_ID",
 		"ERR_CODEX_REQUEST_INVALID", "ERR_LMSTUDIO_REQUEST_INVALID", "ERR_LMSTUDIO_BASE_URL_INVALID", "ERR_LMSTUDIO_API_KEY_REQUIRED":
-		return security.NewError("ERR_LLM_REQUEST_INVALID", security.Public(err).Message, security.StatusCode(err))
+		providerError := security.Public(err)
+		return &security.AppError{
+			Code:       "ERR_LLM_REQUEST_INVALID",
+			Message:    providerError.Message,
+			Details:    providerError.Details,
+			StatusCode: security.StatusCode(err),
+		}
 	default:
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "provider LLM indisponivel", http.StatusBadGateway)
 	}
