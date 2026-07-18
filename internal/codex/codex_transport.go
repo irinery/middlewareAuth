@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -58,7 +59,7 @@ func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.Store
 		return nil, err
 	}
 	options = t.defaults(options)
-	raw, err := json.Marshal(request)
+	raw, err := marshalCodexWireRequest(request, options)
 	if err != nil {
 		return nil, security.Wrap("ERR_CODEX_REQUEST_INVALID", "payload Codex invalido", http.StatusBadRequest, err)
 	}
@@ -112,7 +113,14 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		upstreamCode, upstreamMessage := readUpstreamError(resp.Body)
+		if upstreamCode != "" || upstreamMessage != "" {
+			slog.WarnContext(ctx, "codex_request_rejected",
+				slog.Int("status", resp.StatusCode),
+				slog.String("upstream_code", upstreamCode),
+				slog.String("upstream_message", upstreamMessage),
+			)
+		}
 		delay := retryDelay(resp, 1000)
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
@@ -125,12 +133,135 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 			return nil, true, delay, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex indisponivel", http.StatusBadGateway)
 		default:
 			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-				return nil, false, 0, security.NewError("ERR_CODEX_REQUEST_INVALID", "Codex recusou o request", http.StatusBadRequest)
+				rejected := security.NewError("ERR_CODEX_REQUEST_INVALID", "Codex recusou o request", http.StatusBadRequest)
+				if detail := upstreamErrorDetail(upstreamCode, upstreamMessage); detail != "" {
+					rejected = security.WithDetail(rejected, "provider", detail)
+				}
+				return nil, false, 0, rejected
 			}
 			return nil, false, 0, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex retornou status inesperado", http.StatusBadGateway)
 		}
 	}
 	return parseResponse(resp)
+}
+
+type codexWireContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type codexWireInputItem struct {
+	Type    string             `json:"type"`
+	Role    string             `json:"role"`
+	Content []codexWireContent `json:"content"`
+}
+
+type codexWireRequest struct {
+	Model             string                `json:"model"`
+	Instructions      string                `json:"instructions,omitempty"`
+	Input             []codexWireInputItem  `json:"input"`
+	Tools             []CodexToolDefinition `json:"tools"`
+	ToolChoice        string                `json:"tool_choice"`
+	ParallelToolCalls bool                  `json:"parallel_tool_calls"`
+	Reasoning         *CodexReasoningConfig `json:"reasoning,omitempty"`
+	Store             bool                  `json:"store"`
+	Stream            bool                  `json:"stream"`
+	Include           []string              `json:"include"`
+	PromptCacheKey    string                `json:"prompt_cache_key,omitempty"`
+}
+
+// marshalCodexWireRequest adapts the stable MiddlewareAuth contract to the
+// current Codex Responses wire protocol. The public contract intentionally
+// keeps content as a string so LM Studio and existing Pocket clients remain
+// independent from provider-specific request shapes.
+func marshalCodexWireRequest(request CodexResponseRequest, options CodexTransportOptions) ([]byte, error) {
+	input := make([]codexWireInputItem, 0, len(request.Input))
+	for _, item := range request.Input {
+		role := item.Role
+		if role == "system" {
+			role = "developer"
+		}
+		contentType := "input_text"
+		if role == "assistant" {
+			contentType = "output_text"
+		}
+		input = append(input, codexWireInputItem{
+			Type: "message",
+			Role: role,
+			Content: []codexWireContent{{
+				Type: contentType,
+				Text: item.Content,
+			}},
+		})
+	}
+
+	wire := codexWireRequest{
+		Model:             request.Model,
+		Instructions:      request.Instructions,
+		Input:             input,
+		Tools:             request.Tools,
+		ToolChoice:        "auto",
+		ParallelToolCalls: false,
+		Reasoning:         request.Reasoning,
+		Store:             false,
+		Stream:            true,
+		Include:           []string{"reasoning.encrypted_content"},
+		PromptCacheKey:    options.SessionID,
+	}
+	raw, err := json.Marshal(wire)
+	if err != nil || len(request.Extra) == 0 {
+		return raw, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	for key, value := range request.Extra {
+		if _, protected := payload[key]; protected {
+			continue
+		}
+		payload[key] = value
+	}
+	return json.Marshal(payload)
+}
+
+func readUpstreamError(body io.Reader) (string, string) {
+	raw, err := io.ReadAll(io.LimitReader(body, 32<<10))
+	if err != nil || len(raw) == 0 {
+		return "", ""
+	}
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return "", ""
+	}
+	code := security.Redact(strings.TrimSpace(envelope.Error.Code))
+	message := security.Redact(strings.TrimSpace(envelope.Error.Message))
+	if code == "" {
+		code = security.Redact(strings.TrimSpace(envelope.Error.Type))
+	}
+	if len(code) > 120 {
+		code = code[:120]
+	}
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	return code, message
+}
+
+func upstreamErrorDetail(code, message string) string {
+	if code == "" {
+		return message
+	}
+	if message == "" {
+		return code
+	}
+	return code + ": " + message
 }
 
 func ResolveCodexResponsesURL(baseURL string, responsesPath string) string {
@@ -258,6 +389,9 @@ func looksLikeSSE(raw []byte) bool {
 func collectOutputText(events []CodexStreamEvent) string {
 	var out strings.Builder
 	for _, event := range events {
+		if event.Type != "response.output_text.delta" {
+			continue
+		}
 		if event.Payload == "" {
 			continue
 		}

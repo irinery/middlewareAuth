@@ -118,6 +118,26 @@ func TestTransportParsesSSEBodyWithJSONContentType(t *testing.T) {
 	}
 }
 
+func TestTransportDoesNotMixReasoningSummaryIntoOutputText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"pensamento interno\"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"resposta final\"}\n\n"))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 5000}, server.Client())
+	response, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account-1"}, CodexResponseRequest{
+		Model: "gpt-test",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+	}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.OutputText != "resposta final" {
+		t.Fatalf("OutputText = %q", response.OutputText)
+	}
+}
+
 func TestTransportForwardsIntelligenceReasoningAndExtra(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -125,12 +145,25 @@ func TestTransportForwardsIntelligenceReasoningAndExtra(t *testing.T) {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Fatal(err)
 		}
-		if body["intelligence"] != "thinking" {
-			t.Fatalf("intelligence = %#v body=%s", body["intelligence"], raw)
+		if _, found := body["intelligence"]; found {
+			t.Fatalf("campo interno intelligence vazou para o protocolo Codex: %s", raw)
 		}
 		reasoning := body["reasoning"].(map[string]any)
 		if reasoning["effort"] != "high" {
 			t.Fatalf("reasoning = %#v", reasoning)
+		}
+		input := body["input"].([]any)
+		message := input[0].(map[string]any)
+		content := message["content"].([]any)[0].(map[string]any)
+		if message["type"] != "message" || content["type"] != "input_text" || content["text"] != "oi" {
+			t.Fatalf("input Codex incompatível: %s", raw)
+		}
+		if body["tool_choice"] != "auto" || body["stream"] != true || body["store"] != false {
+			t.Fatalf("campos obrigatórios Codex ausentes: %s", raw)
+		}
+		include := body["include"].([]any)
+		if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+			t.Fatalf("include = %#v body=%s", include, raw)
 		}
 		if body["futureFlag"] != "enabled" {
 			t.Fatalf("futureFlag = %#v body=%s", body["futureFlag"], raw)
@@ -157,6 +190,62 @@ func TestTransportForwardsIntelligenceReasoningAndExtra(t *testing.T) {
 	}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: 1})
 	if err != nil {
 		t.Fatalf("SendCodexResponse() error = %v", err)
+	}
+}
+
+func TestTransportSerializesAssistantOutputAsOutputText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []struct {
+				Content []struct {
+					Type string `json:"type"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if got := body.Input[0].Content[0].Type; got != "output_text" {
+			t.Fatalf("assistant content type = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp","type":"response"}`))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 5000}, server.Client())
+	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account-1"}, CodexResponseRequest{
+		Model: "gpt-test",
+		Input: []CodexInputItem{{Role: "assistant", Content: "resposta anterior"}},
+	}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTransportMapsSystemMessageToCodexDeveloperRole(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []struct {
+				Role string `json:"role"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if got := body.Input[0].Role; got != "developer" {
+			t.Fatalf("system wire role = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp","type":"response"}`))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 5000}, server.Client())
+	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account-1"}, CodexResponseRequest{
+		Model: "gpt-test",
+		Input: []CodexInputItem{{Role: "system", Content: "instrução"}, {Role: "user", Content: "oi"}},
+	}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: -1})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -201,5 +290,28 @@ func TestTransportMapsProviderStatusWithoutLeakingBody(t *testing.T) {
 				t.Fatalf("erro vazou corpo do provider: %v", err)
 			}
 		})
+	}
+}
+
+func TestTransportReturnsOnlySanitizedProviderErrorDetail(t *testing.T) {
+	tokenCanary := "sk-" + "secret-provider-canary"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"invalid_request","message":"campo input inválido; token ` + tokenCanary + `"},"raw_secret":"não pode aparecer"}`))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 5000}, server.Client())
+	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account-1"}, CodexResponseRequest{
+		Model: "gpt-test",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+	}, CodexTransportOptions{TimeoutMs: 5000, MaxRetries: -1})
+	public := security.Public(err)
+	if len(public.Details) != 1 || public.Details[0].Field != "provider" {
+		t.Fatalf("details = %#v", public.Details)
+	}
+	encoded, _ := json.Marshal(public)
+	if strings.Contains(string(encoded), tokenCanary) || strings.Contains(string(encoded), "raw_secret") {
+		t.Fatalf("detalhe vazou segredo/corpo bruto: %s", encoded)
 	}
 }

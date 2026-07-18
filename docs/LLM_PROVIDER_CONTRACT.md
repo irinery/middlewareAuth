@@ -76,7 +76,29 @@ emitir `metadata`.
 GET /v1/projects/{projectId}/llm/providers
 ```
 
-Resposta:
+Resposta enquanto pendente:
+
+```json
+{
+  "providerId": "openai",
+  "projectId": "pockettrace",
+  "profileId": "default",
+  "loginSessionId": "sess_123",
+  "mode": "device_code",
+  "status": "pending",
+  "authenticated": false,
+  "verificationUrl": "https://auth.example/device",
+  "userCode": "ABCD-EFGH",
+  "expiresAt": 1780000000000
+}
+```
+
+Enquanto o status for `pending`, o polling repete `authUrl` ou o par
+`verificationUrl`/`userCode` retornado na criacao. Isso permite que clientes
+reconstruam a interface depois de refresh, reabertura da tela ou perda da
+resposta inicial. Esses campos somem ao concluir, falhar ou expirar a sessao.
+
+Resposta concluida:
 
 ```json
 {
