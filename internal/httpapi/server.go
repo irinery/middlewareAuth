@@ -38,26 +38,32 @@ type Handler struct {
 }
 
 type loginSession struct {
-	LoginSessionID string
-	ProjectID      string
-	ProfileID      string
-	Mode           string
-	Status         string
-	Flow           oauth.AuthorizationFlow
-	ExpiresAt      int64
-	CompletedAt    int64
-	Error          *security.AppError
+	LoginSessionID  string
+	ProjectID       string
+	ProfileID       string
+	Mode            string
+	Status          string
+	AuthURL         string
+	VerificationURL string
+	UserCode        string
+	Flow            oauth.AuthorizationFlow
+	ExpiresAt       int64
+	CompletedAt     int64
+	Error           *security.AppError
 }
 
 type LoginSessionResponse struct {
-	LoginSessionID string             `json:"loginSessionId"`
-	ProjectID      string             `json:"projectId"`
-	ProfileID      string             `json:"profileId"`
-	Mode           string             `json:"mode"`
-	Status         string             `json:"status"`
-	ExpiresAt      int64              `json:"expiresAt"`
-	CompletedAt    int64              `json:"completedAt,omitempty"`
-	Error          *security.AppError `json:"error,omitempty"`
+	LoginSessionID  string             `json:"loginSessionId"`
+	ProjectID       string             `json:"projectId"`
+	ProfileID       string             `json:"profileId"`
+	Mode            string             `json:"mode"`
+	Status          string             `json:"status"`
+	AuthURL         string             `json:"authUrl,omitempty"`
+	VerificationURL string             `json:"verificationUrl,omitempty"`
+	UserCode        string             `json:"userCode,omitempty"`
+	ExpiresAt       int64              `json:"expiresAt"`
+	CompletedAt     int64              `json:"completedAt,omitempty"`
+	Error           *security.AppError `json:"error,omitempty"`
 }
 
 func NewHandler(cfg config.Config, store auth.ProfileStore, refresher CredentialRefresher, codexSender CodexSender, client *http.Client) *Handler {
@@ -288,6 +294,9 @@ func (h *Handler) clearSessionFlowLocked(session *loginSession) {
 		delete(h.stateIndex, state)
 	}
 	session.Flow = oauth.AuthorizationFlow{}
+	session.AuthURL = ""
+	session.VerificationURL = ""
+	session.UserCode = ""
 }
 
 func (h *Handler) cleanupSessionsLocked() {
@@ -304,14 +313,17 @@ func (h *Handler) cleanupSessionsLocked() {
 
 func (s *loginSession) response() *LoginSessionResponse {
 	return &LoginSessionResponse{
-		LoginSessionID: s.LoginSessionID,
-		ProjectID:      s.ProjectID,
-		ProfileID:      s.ProfileID,
-		Mode:           s.Mode,
-		Status:         s.Status,
-		ExpiresAt:      s.ExpiresAt,
-		CompletedAt:    s.CompletedAt,
-		Error:          s.Error,
+		LoginSessionID:  s.LoginSessionID,
+		ProjectID:       s.ProjectID,
+		ProfileID:       s.ProfileID,
+		Mode:            s.Mode,
+		Status:          s.Status,
+		AuthURL:         s.AuthURL,
+		VerificationURL: s.VerificationURL,
+		UserCode:        s.UserCode,
+		ExpiresAt:       s.ExpiresAt,
+		CompletedAt:     s.CompletedAt,
+		Error:           s.Error,
 	}
 }
 

@@ -284,12 +284,14 @@ func TestLLMResponsesNormalizesProviderFailuresWithoutLeakingCause(t *testing.T)
 func TestLLMLoginStatusNormalizesSessionErrors(t *testing.T) {
 	handler := testHandler(t)
 	if err := handler.addSession(loginSession{
-		LoginSessionID: "pending-session",
-		ProjectID:      "pockettrace",
-		ProfileID:      "default",
-		Mode:           "device_code",
-		Status:         "pending",
-		ExpiresAt:      time.Now().Add(time.Minute).UnixMilli(),
+		LoginSessionID:  "pending-session",
+		ProjectID:       "pockettrace",
+		ProfileID:       "default",
+		Mode:            "device_code",
+		Status:          "pending",
+		VerificationURL: "https://auth.openai.com/codex/device",
+		UserCode:        "ABCD-EFGH",
+		ExpiresAt:       time.Now().Add(time.Minute).UnixMilli(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +329,9 @@ func TestLLMLoginStatusNormalizesSessionErrors(t *testing.T) {
 	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingResponse); err != nil {
 		t.Fatal(err)
 	}
-	if pendingResponse.Status != "pending" || pendingResponse.Error != nil {
+	if pendingResponse.Status != "pending" || pendingResponse.Error != nil ||
+		pendingResponse.VerificationURL != "https://auth.openai.com/codex/device" ||
+		pendingResponse.UserCode != "ABCD-EFGH" {
 		t.Fatalf("response = %#v", pendingResponse)
 	}
 

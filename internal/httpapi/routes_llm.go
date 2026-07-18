@@ -266,16 +266,19 @@ func (h *Handler) handleLLMLoginStatus(w http.ResponseWriter, r *http.Request, p
 		state = "authenticated"
 	}
 	writeJSON(w, http.StatusOK, LLMLoginResponse{
-		ProviderID:     providerID,
-		ProjectID:      projectID,
-		ProfileID:      session.ProfileID,
-		LoginSessionID: session.LoginSessionID,
-		Mode:           session.Mode,
-		Status:         state,
-		Authenticated:  authenticated,
-		ExpiresAt:      session.ExpiresAt,
-		CompletedAt:    session.CompletedAt,
-		Error:          publicLLMError(session.Error),
+		ProviderID:      providerID,
+		ProjectID:       projectID,
+		ProfileID:       session.ProfileID,
+		LoginSessionID:  session.LoginSessionID,
+		Mode:            session.Mode,
+		Status:          state,
+		Authenticated:   authenticated,
+		AuthURL:         session.AuthURL,
+		VerificationURL: session.VerificationURL,
+		UserCode:        session.UserCode,
+		ExpiresAt:       session.ExpiresAt,
+		CompletedAt:     session.CompletedAt,
+		Error:           publicLLMError(session.Error),
 	})
 }
 

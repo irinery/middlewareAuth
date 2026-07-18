@@ -375,6 +375,9 @@ func TestDeviceCodeTimeoutMarksSessionExpired(t *testing.T) {
 	if response.Error == nil || response.Error.Code != "ERR_LOGIN_SESSION_EXPIRED" {
 		t.Fatalf("session error = %#v", response.Error)
 	}
+	if response.UserCode != "" || response.VerificationURL != "" {
+		t.Fatalf("expired session leaked device prompt: %#v", response)
+	}
 }
 
 func TestInvalidProjectIDReturnsBadRequest(t *testing.T) {

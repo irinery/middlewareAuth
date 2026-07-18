@@ -169,6 +169,18 @@
       "method": "GET",
       "path": "/v1/projects/pockettrace/llm/login-sessions/sess_123?providerId=openai&profileId=default"
     },
+    "pendingResponse": {
+      "providerId": "openai",
+      "projectId": "pockettrace",
+      "profileId": "default",
+      "loginSessionId": "sess_123",
+      "mode": "device_code",
+      "status": "pending",
+      "authenticated": false,
+      "verificationUrl": "https://auth.example/device",
+      "userCode": "ABCD-EFGH",
+      "expiresAt": 1780000000000
+    },
     "response": {
       "providerId": "openai",
       "projectId": "pockettrace",

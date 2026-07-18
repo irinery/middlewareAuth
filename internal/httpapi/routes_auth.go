@@ -84,6 +84,7 @@ func (h *Handler) startOAuthLogin(ctx context.Context, projectID, profileID stri
 		ProfileID:      profileID,
 		Mode:           "oauth",
 		Status:         "pending",
+		AuthURL:        flow.URL,
 		Flow:           *flow,
 		ExpiresAt:      expiresAt,
 	}); err != nil {
@@ -104,12 +105,14 @@ func (h *Handler) startDeviceCodeLogin(ctx context.Context, projectID, profileID
 	sessionID := randomID()
 	expiresAt := time.Now().Add(time.Duration(device.ExpiresInMs) * time.Millisecond).UnixMilli()
 	if err := h.addSession(loginSession{
-		LoginSessionID: sessionID,
-		ProjectID:      projectID,
-		ProfileID:      profileID,
-		Mode:           "device_code",
-		Status:         "pending",
-		ExpiresAt:      expiresAt,
+		LoginSessionID:  sessionID,
+		ProjectID:       projectID,
+		ProfileID:       profileID,
+		Mode:            "device_code",
+		Status:          "pending",
+		VerificationURL: device.VerificationURL,
+		UserCode:        device.UserCode,
+		ExpiresAt:       expiresAt,
 	}); err != nil {
 		return nil, err
 	}
