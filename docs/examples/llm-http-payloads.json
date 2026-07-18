@@ -19,6 +19,10 @@
       "responseId",
       "usage",
       "outputText",
+      "outputContract.id",
+      "outputContract.schemaHash",
+      "outputContract.strict",
+      "outputContract.jsonSchema",
       "error.code",
       "error.message"
     ],
@@ -116,6 +120,7 @@
             "intelligence": true,
             "reasoningEffort": true,
             "serviceTier": true,
+            "outputContract": true,
             "systemInstructions": true,
             "tools": false,
             "store": true
@@ -156,6 +161,7 @@
             "intelligence": false,
             "reasoningEffort": false,
             "serviceTier": false,
+            "outputContract": true,
             "systemInstructions": true,
             "tools": false,
             "store": false
@@ -336,6 +342,20 @@
         "reasoning": {
           "effort": "medium",
           "summary": "auto"
+        },
+        "outputContract": {
+          "id": "pockettrace.AIValidatedEnrichment.v1",
+          "schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "strict": true,
+          "jsonSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "summary": { "type": "string" }
+            },
+            "required": ["summary"],
+            "additionalProperties": false
+          }
         }
       }
     },
@@ -343,7 +363,7 @@
       "events": [
         {
           "type": "response.output_text.delta",
-          "payload": "{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}"
+          "payload": "{\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"summary\\\":\\\"ok\\\"}\"}"
         },
         { "type": "done" }
       ],
@@ -353,7 +373,7 @@
         "outputTokens": 1,
         "totalTokens": 11
       },
-      "outputText": "ok"
+      "outputText": "{\"summary\":\"ok\"}"
     }
   },
   "errors": {
@@ -376,6 +396,10 @@
     "requestInvalid": {
       "httpStatus": 400,
       "response": { "error": { "code": "ERR_LLM_REQUEST_INVALID", "message": "request LLM invalido" } }
+    },
+    "outputContractUnsupported": {
+      "httpStatus": 422,
+      "response": { "error": { "code": "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED", "message": "provider ou modelo nao suporta outputContract" } }
     },
     "providerUnavailable": {
       "httpStatus": 502,
@@ -442,6 +466,20 @@
           "profileId": "default",
           "model": "gpt-5.6-sol",
           "serviceTier": "priority",
+          "outputContract": {
+            "id": "pockettrace.AIValidatedEnrichment.v1",
+            "schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "strict": true,
+            "jsonSchema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "summary": { "type": "string" }
+              },
+              "required": ["summary"],
+              "additionalProperties": false
+            }
+          },
           "input": "Responda apenas: ok",
           "stream": true,
           "store": false

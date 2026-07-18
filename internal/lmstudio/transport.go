@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/irinery/middlewareAuth/internal/codex"
+	"github.com/irinery/middlewareAuth/internal/llmcontract"
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
@@ -163,16 +164,31 @@ func (t *Transport) SendResponse(ctx context.Context, baseURL string, apiKey str
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2<<20))
+		if request.OutputContract != nil && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity) {
+			return nil, llmcontract.UnsupportedOutputContract()
+		}
 		return nil, mapHTTPStatus(resp.StatusCode)
 	}
 	rawResp, err := readLimited(resp.Body, maxResponseBytes)
 	if err != nil {
 		return nil, err
 	}
+	var response *codex.CodexResponseStream
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") || looksLikeSSE(rawResp) {
-		return parseChatStream(bytes.NewReader(rawResp))
+		response, err = parseChatStream(bytes.NewReader(rawResp))
+	} else {
+		response, err = parseChatCompletion(rawResp)
 	}
-	return parseChatCompletion(rawResp)
+	if err != nil {
+		return nil, err
+	}
+	if request.OutputContract != nil {
+		response.OutputText, err = llmcontract.NormalizeStructuredOutputText(response.OutputText)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return response, nil
 }
 
 func validAPIKey(apiKey string) bool {
@@ -227,6 +243,9 @@ func looksLikeSSE(raw []byte) bool {
 }
 
 func chatCompletionBody(request codex.CodexResponseRequest) (map[string]any, error) {
+	if err := llmcontract.ValidateOutputContract(request.OutputContract); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(request.Model) == "" {
 		return nil, security.NewError("ERR_LMSTUDIO_REQUEST_INVALID", "model LM Studio obrigatorio", http.StatusBadRequest)
 	}
@@ -251,6 +270,20 @@ func chatCompletionBody(request codex.CodexResponseRequest) (map[string]any, err
 		"model":    request.Model,
 		"messages": messages,
 		"stream":   request.Stream,
+	}
+	if contract := request.OutputContract; contract != nil {
+		providerSchema, err := llmcontract.ProviderJSONSchema(contract)
+		if err != nil {
+			return nil, err
+		}
+		body["response_format"] = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   llmcontract.ProviderSchemaName(contract),
+				"strict": contract.Strict,
+				"schema": providerSchema,
+			},
+		}
 	}
 	for key, value := range request.Extra {
 		if _, protected := body[key]; protected {

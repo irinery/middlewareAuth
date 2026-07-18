@@ -86,6 +86,9 @@ func TestLLMProvidersExposesCanonicalBlackBoxContract(t *testing.T) {
 	if !response.Providers[0].Capabilities.ServiceTier || response.Providers[1].Capabilities.ServiceTier {
 		t.Fatalf("service tier capabilities = %#v", response.Providers)
 	}
+	if !response.Providers[0].Capabilities.OutputContract || !response.Providers[1].Capabilities.OutputContract {
+		t.Fatalf("outputContract capabilities = %#v", response.Providers)
+	}
 	if len(response.Providers[0].Models) != 3 || response.Providers[0].Models[0].ID != "gpt-5.6-sol" {
 		t.Fatalf("OpenAI fallback models = %#v", response.Providers[0].Models)
 	}
@@ -202,7 +205,13 @@ func TestLLMResponsesDispatchesInternallyWithoutControlFieldsReachingProvider(t 
 		"store":false,
 		"serviceTier":" priority ",
 		"service_tier":"flex",
-		"max_output_tokens":12000
+		"max_output_tokens":12000,
+		"outputContract":{
+			"id":"pockettrace.AIValidatedEnrichment.v1",
+			"schemaHash":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"strict":true,
+			"jsonSchema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}
+		}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/projects/pockettrace/llm/responses", bytes.NewBufferString(body))
 	req.Header.Set("Authorization", "Bearer "+handlerTestToken)
@@ -231,8 +240,49 @@ func TestLLMResponsesDispatchesInternallyWithoutControlFieldsReachingProvider(t 
 	if _, exists := sender.request.Extra["serviceTier"]; exists {
 		t.Fatalf("serviceTier leaked without normalization: %#v", sender.request.Extra)
 	}
+	if sender.request.OutputContract == nil || sender.request.OutputContract.ID != "pockettrace.AIValidatedEnrichment.v1" || !sender.request.OutputContract.Strict {
+		t.Fatalf("outputContract = %#v", sender.request.OutputContract)
+	}
+	if _, exists := sender.request.Extra["outputContract"]; exists {
+		t.Fatalf("outputContract leaked into extra: %#v", sender.request.Extra)
+	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"outputText":"{\"summary\":\"ok\"}"`)) {
 		t.Fatalf("response = %s", rec.Body.String())
+	}
+}
+
+func TestLLMResponsesRejectsInvalidOutputContractBeforeProvider(t *testing.T) {
+	for _, body := range []string{
+		`{"providerId":"openai","profileId":"work","model":"gpt-test","input":[{"role":"user","content":"oi"}],"outputContract":{"id":"schema.v1","schemaHash":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","strict":false,"jsonSchema":{"type":"object"}}}`,
+		`{"providerId":"openai","profileId":"work","model":"gpt-test","input":[{"role":"user","content":"oi"}],"outputContract":{"id":"schema.v1","schemaHash":"invalid","strict":true,"jsonSchema":{"type":"object"}}}`,
+		`{"providerId":"openai","profileId":"work","model":"gpt-test","input":[{"role":"user","content":"oi"}],"outputContract":{"id":"schema.v1","schemaHash":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","strict":true,"jsonSchema":true}}`,
+	} {
+		handler := testHandler(t)
+		sender := &recordingCodexSender{}
+		handler.codex = sender
+		req := httptest.NewRequest(http.MethodPost, "/v1/projects/pockettrace/llm/responses", bytes.NewBufferString(body))
+		req.Header.Set("Authorization", "Bearer "+handlerTestToken)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var response MiddlewareErrorResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Error.Code != "ERR_LLM_REQUEST_INVALID" || sender.request.Model != "" {
+			t.Fatalf("response=%#v providerRequest=%#v", response, sender.request)
+		}
+	}
+}
+
+func TestOutputContractCapabilityFailsClosed(t *testing.T) {
+	if llmProviderCapabilities("future-provider").OutputContract {
+		t.Fatal("provider sem capability anunciou outputContract")
+	}
+	if !llmProviderCapabilities(providerOpenAI).OutputContract || !llmProviderCapabilities(providerLMStudio).OutputContract {
+		t.Fatal("adapters atuais perderam capability outputContract")
 	}
 }
 
@@ -317,6 +367,7 @@ func TestLLMResponsesNormalizesProviderFailuresWithoutLeakingCause(t *testing.T)
 		{name: "timeout", providerCode: "ERR_CODEX_TIMEOUT", providerStatus: http.StatusGatewayTimeout, wantCode: "ERR_LLM_PROVIDER_UNAVAILABLE", wantStatus: http.StatusGatewayTimeout},
 		{name: "rate limited", providerCode: "ERR_CODEX_RATE_LIMITED", providerStatus: http.StatusTooManyRequests, wantCode: "ERR_LLM_RATE_LIMITED", wantStatus: http.StatusTooManyRequests},
 		{name: "upstream failure", providerCode: "ERR_CODEX_HTTP_FAILED", providerStatus: http.StatusBadGateway, wantCode: "ERR_LLM_PROVIDER_UNAVAILABLE", wantStatus: http.StatusBadGateway},
+		{name: "output contract unsupported", providerCode: "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED", providerStatus: http.StatusUnprocessableEntity, wantCode: "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED", wantStatus: http.StatusUnprocessableEntity},
 	}
 
 	for _, test := range tests {
@@ -340,7 +391,11 @@ func TestLLMResponsesNormalizesProviderFailuresWithoutLeakingCause(t *testing.T)
 			if response.Error.Code != test.wantCode {
 				t.Fatalf("code = %s, want %s body=%s", response.Error.Code, test.wantCode, rec.Body.String())
 			}
-			if stringsContainAny(rec.Body.String(), canary, test.providerCode, "provider failure") {
+			leakedValues := []string{canary, "provider failure"}
+			if test.providerCode != test.wantCode {
+				leakedValues = append(leakedValues, test.providerCode)
+			}
+			if stringsContainAny(rec.Body.String(), leakedValues...) {
 				t.Fatalf("provider error leaked through public contract: %s", rec.Body.String())
 			}
 		})

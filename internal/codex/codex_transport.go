@@ -14,6 +14,7 @@ import (
 
 	"github.com/irinery/middlewareAuth/internal/auth"
 	"github.com/irinery/middlewareAuth/internal/config"
+	"github.com/irinery/middlewareAuth/internal/llmcontract"
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
@@ -125,8 +126,14 @@ func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.Store
 
 	var lastErr error
 	for attempt := 0; attempt <= options.MaxRetries; attempt++ {
-		response, retry, delay, err := t.sendOnce(ctx, credential, raw, options)
+		response, retry, delay, err := t.sendOnce(ctx, credential, raw, options, request.OutputContract != nil)
 		if err == nil {
+			if request.OutputContract != nil {
+				response.OutputText, err = llmcontract.NormalizeStructuredOutputText(response.OutputText)
+				if err != nil {
+					return nil, err
+				}
+			}
 			return response, nil
 		}
 		lastErr = err
@@ -144,7 +151,7 @@ func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.Store
 	return nil, lastErr
 }
 
-func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCredential, raw []byte, options CodexTransportOptions) (*CodexResponseStream, bool, time.Duration, error) {
+func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCredential, raw []byte, options CodexTransportOptions, hasOutputContract bool) (*CodexResponseStream, bool, time.Duration, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(options.TimeoutMs)*time.Millisecond)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ResolveCodexResponsesURL(t.cfg.BaseURL, t.cfg.ResponsesPath), bytes.NewReader(raw))
@@ -171,11 +178,18 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		upstreamCode, upstreamMessage := readUpstreamError(resp.Body)
 		if upstreamCode != "" || upstreamMessage != "" {
-			slog.WarnContext(ctx, "codex_request_rejected",
-				slog.Int("status", resp.StatusCode),
-				slog.String("upstream_code", upstreamCode),
-				slog.String("upstream_message", upstreamMessage),
-			)
+			if hasOutputContract {
+				slog.WarnContext(ctx, "codex_request_rejected",
+					slog.Int("status", resp.StatusCode),
+					slog.Bool("output_contract", true),
+				)
+			} else {
+				slog.WarnContext(ctx, "codex_request_rejected",
+					slog.Int("status", resp.StatusCode),
+					slog.String("upstream_code", upstreamCode),
+					slog.String("upstream_message", upstreamMessage),
+				)
+			}
 		}
 		delay := retryDelay(resp, 1000)
 		switch resp.StatusCode {
@@ -189,6 +203,9 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 			return nil, true, delay, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex indisponivel", http.StatusBadGateway)
 		default:
 			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+				if hasOutputContract {
+					return nil, false, 0, llmcontract.UnsupportedOutputContract()
+				}
 				rejected := security.NewError("ERR_CODEX_REQUEST_INVALID", "Codex recusou o request", http.StatusBadRequest)
 				if detail := upstreamErrorDetail(upstreamCode, upstreamMessage); detail != "" {
 					rejected = security.WithDetail(rejected, "provider", detail)
@@ -224,6 +241,18 @@ type codexWireRequest struct {
 	Stream            bool                  `json:"stream"`
 	Include           []string              `json:"include"`
 	PromptCacheKey    string                `json:"prompt_cache_key,omitempty"`
+	Text              *codexWireTextConfig  `json:"text,omitempty"`
+}
+
+type codexWireTextConfig struct {
+	Format codexWireJSONSchemaFormat `json:"format"`
+}
+
+type codexWireJSONSchemaFormat struct {
+	Type   string          `json:"type"`
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // marshalCodexWireRequest adapts the stable MiddlewareAuth contract to the
@@ -263,6 +292,18 @@ func marshalCodexWireRequest(request CodexResponseRequest, options CodexTranspor
 		Stream:            true,
 		Include:           []string{"reasoning.encrypted_content"},
 		PromptCacheKey:    options.SessionID,
+	}
+	if contract := request.OutputContract; contract != nil {
+		providerSchema, err := llmcontract.ProviderJSONSchema(contract)
+		if err != nil {
+			return nil, err
+		}
+		wire.Text = &codexWireTextConfig{Format: codexWireJSONSchemaFormat{
+			Type:   "json_schema",
+			Name:   llmcontract.ProviderSchemaName(contract),
+			Strict: contract.Strict,
+			Schema: providerSchema,
+		}}
 	}
 	raw, err := json.Marshal(wire)
 	if err != nil || len(request.Extra) == 0 {
@@ -382,6 +423,9 @@ func (t *Transport) defaults(options CodexTransportOptions) CodexTransportOption
 }
 
 func validateRequest(request CodexResponseRequest) error {
+	if err := llmcontract.ValidateOutputContract(request.OutputContract); err != nil {
+		return err
+	}
 	if request.Model == "" || len(request.Model) > 120 {
 		return security.WithDetail(security.NewError("ERR_CODEX_REQUEST_INVALID", "model Codex invalido", http.StatusBadRequest), "model", "obrigatorio e ate 120 caracteres")
 	}

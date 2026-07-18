@@ -451,6 +451,9 @@ func (s *Server) llmResponses(ctx context.Context, args map[string]any) (string,
 	if serviceTier := strings.TrimSpace(stringArg(args, "serviceTier", "")); serviceTier != "" {
 		body["service_tier"] = serviceTier
 	}
+	if outputContract, exists := args["outputContract"]; exists {
+		body["outputContract"] = outputContract
+	}
 	if extra := objectArg(args, "extra"); len(extra) > 0 {
 		for key, value := range extra {
 			if _, exists := body[key]; exists {
@@ -1023,7 +1026,13 @@ func toolDefinitions() []map[string]any {
 				"reasoningEffort":  map[string]any{"type": "string", "description": "Campo portavel; aliases: padrao -> medium, estendido -> high."},
 				"reasoningSummary": map[string]any{"type": "string", "description": "Resumo de raciocinio quando suportado pelo backend."},
 				"reasoning":        map[string]any{"type": "object", "description": "Objeto reasoning bruto; tem precedencia sobre reasoningEffort/reasoningSummary."},
-				"extra":            map[string]any{"type": "object", "description": "Campos top-level futuros repassados ao backend sem override dos campos conhecidos."},
+				"outputContract": objectSchema(map[string]any{
+					"id":         map[string]any{"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+					"schemaHash": map[string]any{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+					"strict":     map[string]any{"type": "boolean", "const": true},
+					"jsonSchema": map[string]any{"type": "object", "description": "JSON Schema portavel; limite de 64 KiB, profundidade 16 e 256 propriedades declaradas."},
+				}, []string{"id", "schemaHash", "strict", "jsonSchema"}),
+				"extra": map[string]any{"type": "object", "description": "Campos top-level futuros repassados ao backend sem override dos campos conhecidos."},
 				"input": map[string]any{
 					"oneOf": []map[string]any{
 						{"type": "string"},

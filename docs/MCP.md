@@ -106,6 +106,7 @@ intelligence       nivel livre do backend, exemplo atual: instant ou thinking
 reasoningEffort    esforco reflexivo; aliases: padrao -> medium, estendido -> high
 serviceTier        ID de serviceTiers; priority ativa o toggle Fast atual
 reasoning          objeto bruto para quem quiser passar o formato nativo do backend
+outputContract     envelope portavel id/schemaHash/strict/jsonSchema; exige capability outputContract=true
 extra              campos top-level futuros, repassados sem sobrescrever campos conhecidos
 ```
 
@@ -120,6 +121,18 @@ Exemplo equivalente ao seletor visual `5.6 Luna` + `max` + `Fast`:
   "intelligence": "thinking",
   "reasoningEffort": "max",
   "serviceTier": "priority",
+  "outputContract": {
+    "id": "pockettrace.AIValidatedEnrichment.v1",
+    "schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "strict": true,
+    "jsonSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": { "summary": { "type": "string" } },
+      "required": ["summary"],
+      "additionalProperties": false
+    }
+  },
   "input": "Responda apenas: ok pocketwiki"
 }
 ```

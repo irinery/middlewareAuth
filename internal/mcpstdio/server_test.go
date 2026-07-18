@@ -332,6 +332,10 @@ func TestLLMResponsesUsesGenericHTTPContract(t *testing.T) {
 		if body["service_tier"] != "priority" {
 			t.Fatalf("service_tier = %#v", body["service_tier"])
 		}
+		outputContract := body["outputContract"].(map[string]any)
+		if outputContract["id"] != "pockettrace.contract.v1" || outputContract["strict"] != true {
+			t.Fatalf("outputContract = %#v", outputContract)
+		}
 		_, _ = w.Write([]byte(`{"events":[{"type":"response.output_text.delta","payload":"{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}"}],"outputText":"ok pocketwiki"}`))
 	}))
 	defer httpServer.Close()
@@ -346,7 +350,13 @@ func TestLLMResponsesUsesGenericHTTPContract(t *testing.T) {
 		"intelligence":    "Thinking",
 		"reasoningEffort": "Estendido",
 		"serviceTier":     "priority",
-		"extra":           map[string]any{"futureSelector": "next", "model": "ignored"},
+		"outputContract": map[string]any{
+			"id":         "pockettrace.contract.v1",
+			"schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"strict":     true,
+			"jsonSchema": map[string]any{"type": "object", "additionalProperties": false},
+		},
+		"extra": map[string]any{"futureSelector": "next", "model": "ignored"},
 	})
 	if isErr {
 		t.Fatalf("llm_responses error: %s", text)
