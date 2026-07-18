@@ -43,6 +43,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Security.AllowedAuthHosts[0] != "auth.openai.com" {
 		t.Fatalf("AllowedAuthHosts = %#v", cfg.Security.AllowedAuthHosts)
 	}
+	if cfg.Codex.ModelsPath != "/codex/models" || cfg.Codex.ClientVersion != "0.145.0" {
+		t.Fatalf("Codex model discovery config = %#v", cfg.Codex)
+	}
 	server := NewHTTPServer(cfg.HTTP, http.NewServeMux())
 	if server.Addr != "127.0.0.1:18787" {
 		t.Fatalf("server.Addr = %q", server.Addr)

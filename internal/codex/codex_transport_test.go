@@ -39,6 +39,48 @@ func TestResolveCodexResponsesURLAvoidsDuplicateCodex(t *testing.T) {
 	}
 }
 
+func TestListCodexModelsUsesAuthenticatedCatalogEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/codex/models" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("client_version") != "0.145.0" {
+			t.Fatalf("client_version = %q", r.URL.Query().Get("client_version"))
+		}
+		if r.Header.Get("Authorization") != "Bearer access" || r.Header.Get("chatgpt-account-id") != "account-1" {
+			t.Fatalf("headers = %#v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-5.6-luna","display_name":"GPT-5.6-Luna","description":"Fast","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low","description":"Fast responses"},{"effort":"max","description":"Maximum reasoning"}],"visibility":"list","supported_in_api":true,"priority":3,"service_tiers":[{"id":"priority","name":"Fast","description":"1.5x speed"}]}]}`))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{
+		BaseURL:          server.URL,
+		ModelsPath:       "/codex/models",
+		ClientVersion:    "0.145.0",
+		RequestTimeoutMs: 5000,
+	}, server.Client())
+	models, err := transport.ListCodexModels(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account-1"})
+	if err != nil {
+		t.Fatalf("ListCodexModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].Slug != "gpt-5.6-luna" || len(models[0].SupportedReasoningLevels) != 2 {
+		t.Fatalf("models = %#v", models)
+	}
+	if len(models[0].ServiceTiers) != 1 || models[0].ServiceTiers[0].ID != "priority" {
+		t.Fatalf("service tiers = %#v", models[0].ServiceTiers)
+	}
+}
+
+func TestResolveCodexModelsURLAvoidsDuplicateCodex(t *testing.T) {
+	got := ResolveCodexModelsURL("https://chatgpt.com/backend-api/codex", "/codex/models", "0.145.0")
+	want := "https://chatgpt.com/backend-api/codex/models?client_version=0.145.0"
+	if got != want {
+		t.Fatalf("URL = %q, want %q", got, want)
+	}
+}
+
 func TestTransportRetriesRateLimitAndParsesSSE(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

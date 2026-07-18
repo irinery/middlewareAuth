@@ -80,7 +80,7 @@ Endpoints principais:
 
 ```text
 GET  http://localhost:18787/healthz
-GET  http://localhost:18787/v1/projects/{projectId}/llm/providers
+GET  http://localhost:18787/v1/projects/{projectId}/llm/providers?profileId={profileId}
 POST http://localhost:18787/v1/projects/{projectId}/llm/login
 GET  http://localhost:18787/v1/projects/{projectId}/llm/login-sessions/{loginSessionId}
 GET  http://localhost:18787/v1/projects/{projectId}/llm/status
@@ -115,7 +115,7 @@ curl -s http://localhost:18787/healthz
 
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
-  http://localhost:18787/v1/projects/acme/llm/providers
+  "http://localhost:18787/v1/projects/acme/llm/providers?profileId=default"
 
 curl -s \
   -H "Authorization: Bearer $MIDDLEWARE_CLIENT_TOKEN" \
@@ -188,4 +188,5 @@ Detalhes e config de cliente: [docs/MCP.md](./docs/MCP.md).
 Para clientes MCP novos, use o contrato generico `llm_*` descrito em [docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md). As tools genericas chamam a API HTTP canonica; `openai_*` e `codex_responses` seguem disponiveis apenas por compatibilidade.
 O provider `lmstudio` usa API key local salva criptografada pelo middleware e fala com a API OpenAI-compatible do LM Studio.
 
-Para escolher comportamento tipo `Instant`/`Thinking` e esforco reflexivo, use `llm_responses` com `providerId`, `model`, `intelligence`, `reasoningEffort` ou `reasoning`. O wrapper aceita valores livres e `extra` para seletores futuros do backend.
+O catalogo `llm_providers` descobre os modelos OpenAI liberados para o perfil autenticado, incluindo esforcos e tiers como `Fast`. Para selecionar, use `llm_responses` com `providerId`, `model`, `reasoningEffort`/`reasoning` e `serviceTier`; o wrapper aceita valores livres e `extra` para seletores futuros do backend.
+O endpoint upstream usa `OPENAI_CODEX_MODELS_PATH=/codex/models` e `OPENAI_CODEX_CLIENT_VERSION=0.145.0` por default; ambos podem ser ajustados sem depender de uma instalacao local do Codex.

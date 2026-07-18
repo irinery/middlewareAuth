@@ -22,7 +22,7 @@ export MIDDLEWARE_CLIENT_TOKEN='<token gerado para o middleware>'
 export MCP_DEFAULT_PROJECT_ID='acme'
 export MIDDLEWARE_LLM_PROVIDER='openai'
 export MIDDLEWARE_LLM_PROFILE_ID='default'
-export MIDDLEWARE_LLM_MODEL='gpt-5.5'
+export MIDDLEWARE_LLM_MODEL='gpt-5.6-sol'
 ```
 
 Nao use `.env` para essas variaveis. Passe pelo gerenciador do cliente MCP ou pelo ambiente do processo.
@@ -56,7 +56,7 @@ Defaults MCP:
 ```text
 providerId  MIDDLEWARE_LLM_PROVIDER, fallback openai
 profileId  MIDDLEWARE_LLM_PROFILE_ID, fallback MCP_OPENAI_PROFILE_ID, fallback default
-model      MIDDLEWARE_LLM_MODEL, fallback MCP_OPENAI_MODEL, fallback gpt-5.5
+model      MIDDLEWARE_LLM_MODEL, fallback MCP_OPENAI_MODEL, fallback gpt-5.6-sol
 projectId  MCP_DEFAULT_PROJECT_ID, se o cliente nao enviar projectId
 ```
 
@@ -101,23 +101,25 @@ Na tool `llm_responses`, separe estes conceitos:
 
 ```text
 providerId         provider LLM; hoje openai
-model              versao/familia do modelo, exemplo: gpt-5.5
+model              ID publicado por llm_providers, exemplo: gpt-5.6-luna
 intelligence       nivel livre do backend, exemplo atual: instant ou thinking
 reasoningEffort    esforco reflexivo; aliases: padrao -> medium, estendido -> high
+serviceTier        ID de serviceTiers; priority ativa o toggle Fast atual
 reasoning          objeto bruto para quem quiser passar o formato nativo do backend
 extra              campos top-level futuros, repassados sem sobrescrever campos conhecidos
 ```
 
-Exemplo equivalente ao seletor visual `5.5` + `Thinking` + `Estendido`:
+Exemplo equivalente ao seletor visual `5.6 Luna` + `max` + `Fast`:
 
 ```json
 {
   "providerId": "openai",
   "projectId": "acme",
   "profileId": "default",
-  "model": "gpt-5.5",
+  "model": "gpt-5.6-luna",
   "intelligence": "thinking",
-  "reasoningEffort": "estendido",
+  "reasoningEffort": "max",
+  "serviceTier": "priority",
   "input": "Responda apenas: ok pocketwiki"
 }
 ```
@@ -129,7 +131,7 @@ Se a OpenAI mudar nomes ou adicionar seletores, use valores nativos diretamente 
   "providerId": "openai",
   "projectId": "acme",
   "profileId": "default",
-  "model": "gpt-5.5",
+  "model": "gpt-5.6-sol",
   "intelligence": "research",
   "reasoning": { "effort": "extended" },
   "extra": {
@@ -152,7 +154,7 @@ Exemplo de config para clientes MCP locais:
         "MCP_DEFAULT_PROJECT_ID": "acme",
         "MIDDLEWARE_LLM_PROVIDER": "openai",
         "MIDDLEWARE_LLM_PROFILE_ID": "default",
-        "MIDDLEWARE_LLM_MODEL": "gpt-5.5"
+        "MIDDLEWARE_LLM_MODEL": "gpt-5.6-sol"
       }
     }
   }

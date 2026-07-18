@@ -80,9 +80,10 @@ curl -s \
   -d '{
 	"providerId": "openai",
 	"profileId": "default",
-    "model": "gpt-5.5",
+    "model": "gpt-5.6-sol",
     "intelligence": "thinking",
     "reasoning": {"effort": "high"},
+    "serviceTier": "priority",
     "input": [{"role":"user","content":"responda ok"}],
     "stream": true
   }' \
