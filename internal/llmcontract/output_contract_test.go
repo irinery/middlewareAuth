@@ -10,14 +10,19 @@ import (
 
 const testSchemaHash = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func hashForTest(schema json.RawMessage) string {
+	return SchemaHash(schema)
+}
+
 func TestValidateOutputContract(t *testing.T) {
 	valid := func() *OutputContract {
-		return &OutputContract{
+		contract := &OutputContract{
 			ID:         "pockettrace.AIValidatedEnrichment.v1",
-			SchemaHash: testSchemaHash,
 			Strict:     true,
 			JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`),
 		}
+		contract.SchemaHash = hashForTest(contract.JSONSchema)
+		return contract
 	}
 	if err := ValidateOutputContract(valid()); err != nil {
 		t.Fatalf("valid contract: %v", err)
@@ -29,6 +34,7 @@ func TestValidateOutputContract(t *testing.T) {
 	}{
 		{name: "id", mutate: func(c *OutputContract) { c.ID = "invalid id" }},
 		{name: "hash", mutate: func(c *OutputContract) { c.SchemaHash = "sha256:ABC" }},
+		{name: "hash mismatch", mutate: func(c *OutputContract) { c.SchemaHash = testSchemaHash }},
 		{name: "strict", mutate: func(c *OutputContract) { c.Strict = false }},
 		{name: "schema primitive", mutate: func(c *OutputContract) { c.JSONSchema = json.RawMessage(`true`) }},
 		{name: "schema trailing JSON", mutate: func(c *OutputContract) { c.JSONSchema = json.RawMessage(`{} {}`) }},
@@ -56,7 +62,7 @@ func TestValidateOutputContractComplexityLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contract := &OutputContract{ID: "schema.v1", SchemaHash: testSchemaHash, Strict: true, JSONSchema: raw}
+	contract := &OutputContract{ID: "schema.v1", SchemaHash: hashForTest(raw), Strict: true, JSONSchema: raw}
 	if err := ValidateOutputContract(contract); security.Code(err) != "ERR_LLM_REQUEST_INVALID" {
 		t.Fatalf("properties error=%v code=%s", err, security.Code(err))
 	}
@@ -70,6 +76,7 @@ func TestValidateOutputContractComplexityLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	contract.JSONSchema = raw
+	contract.SchemaHash = hashForTest(raw)
 	if err := ValidateOutputContract(contract); security.Code(err) != "ERR_LLM_REQUEST_INVALID" {
 		t.Fatalf("depth error=%v code=%s", err, security.Code(err))
 	}
@@ -95,7 +102,7 @@ func TestProviderJSONSchemaPreservesPublicSchemaAndPocketTraceSubset(t *testing.
 		"required":["summary","evidence"],
 		"additionalProperties":false
 	}`)
-	contract := &OutputContract{ID: "pockettrace.AIValidatedEnrichment.v1", SchemaHash: testSchemaHash, Strict: true, JSONSchema: publicSchema}
+	contract := &OutputContract{ID: "pockettrace.AIValidatedEnrichment.v1", SchemaHash: hashForTest(publicSchema), Strict: true, JSONSchema: publicSchema}
 	before := append([]byte(nil), contract.JSONSchema...)
 	wireSchema, err := ProviderJSONSchema(contract)
 	if err != nil {
@@ -109,7 +116,7 @@ func TestProviderJSONSchemaPreservesPublicSchemaAndPocketTraceSubset(t *testing.
 			t.Fatalf("wire schema perdeu %s: %s", keyword, wireSchema)
 		}
 	}
-	if string(contract.JSONSchema) != string(before) || contract.SchemaHash != testSchemaHash || !strings.Contains(string(contract.JSONSchema), `"$schema"`) {
+	if string(contract.JSONSchema) != string(before) || contract.SchemaHash != hashForTest(publicSchema) || !strings.Contains(string(contract.JSONSchema), `"$schema"`) {
 		t.Fatalf("public contract was mutated: %#v", contract)
 	}
 }

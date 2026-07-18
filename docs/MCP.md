@@ -123,7 +123,7 @@ Exemplo equivalente ao seletor visual `5.6 Luna` + `max` + `Fast`:
   "serviceTier": "priority",
   "outputContract": {
     "id": "pockettrace.AIValidatedEnrichment.v1",
-    "schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "schemaHash": "sha256:43d728077867a5329320fcfff2f07b4426097d99fb7b6c6adde5178f71ec1060",
     "strict": true,
     "jsonSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",

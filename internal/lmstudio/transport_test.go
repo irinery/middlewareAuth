@@ -14,9 +14,14 @@ import (
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
-const lmStudioTestSchemaHash = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 func TestTransportTranslatesOutputContractToResponseFormat(t *testing.T) {
+	publicSchema := json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$defs":{"value":{"anyOf":[{"type":"string"},{"type":"null"}]}},"type":"object","properties":{"value":{"$ref":"#/$defs/value"}},"required":["value"],"additionalProperties":false}`)
+	contract := &llmcontract.OutputContract{
+		ID:         "pockettrace.contract.v1",
+		SchemaHash: llmcontract.SchemaHash(publicSchema),
+		Strict:     true,
+		JSONSchema: publicSchema,
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -24,7 +29,7 @@ func TestTransportTranslatesOutputContractToResponseFormat(t *testing.T) {
 		}
 		format := body["response_format"].(map[string]any)
 		jsonSchema := format["json_schema"].(map[string]any)
-		if format["type"] != "json_schema" || jsonSchema["name"] != "pockettrace_contract_v1_0123456789abcdef" || jsonSchema["strict"] != true {
+		if format["type"] != "json_schema" || jsonSchema["name"] != llmcontract.ProviderSchemaName(contract) || jsonSchema["strict"] != true {
 			t.Fatalf("response_format=%#v", format)
 		}
 		schema := jsonSchema["schema"].(map[string]any)
@@ -39,15 +44,10 @@ func TestTransportTranslatesOutputContractToResponseFormat(t *testing.T) {
 	defer server.Close()
 
 	_, err := NewTransport(server.Client()).SendResponse(context.Background(), server.URL, "local-api-key", codex.CodexResponseRequest{
-		Model: "local-model",
-		Input: []codex.CodexInputItem{{Role: "user", Content: "oi"}},
-		OutputContract: &llmcontract.OutputContract{
-			ID:         "pockettrace.contract.v1",
-			SchemaHash: lmStudioTestSchemaHash,
-			Strict:     true,
-			JSONSchema: json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$defs":{"value":{"anyOf":[{"type":"string"},{"type":"null"}]}},"type":"object","properties":{"value":{"$ref":"#/$defs/value"}},"required":["value"],"additionalProperties":false}`),
-		},
-		Extra: map[string]any{"response_format": "must-not-override"},
+		Model:          "local-model",
+		Input:          []codex.CodexInputItem{{Role: "user", Content: "oi"}},
+		OutputContract: contract,
+		Extra:          map[string]any{"response_format": "must-not-override"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,14 +60,15 @@ func TestTransportRejectsFencedStructuredOutput(t *testing.T) {
 	}))
 	defer server.Close()
 
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false}`)
 	_, err := NewTransport(server.Client()).SendResponse(context.Background(), server.URL, "local-api-key", codex.CodexResponseRequest{
 		Model: "local-model",
 		Input: []codex.CodexInputItem{{Role: "user", Content: "oi"}},
 		OutputContract: &llmcontract.OutputContract{
 			ID:         "schema.v1",
-			SchemaHash: lmStudioTestSchemaHash,
+			SchemaHash: llmcontract.SchemaHash(schema),
 			Strict:     true,
-			JSONSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`),
+			JSONSchema: schema,
 		},
 	})
 	if security.Code(err) != "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED" {
@@ -82,14 +83,15 @@ func TestTransportMapsOutputContractModelRejection(t *testing.T) {
 	}))
 	defer server.Close()
 
+	schema := json.RawMessage(`{"type":"object"}`)
 	_, err := NewTransport(server.Client()).SendResponse(context.Background(), server.URL, "local-api-key", codex.CodexResponseRequest{
 		Model: "small-model",
 		Input: []codex.CodexInputItem{{Role: "user", Content: "oi"}},
 		OutputContract: &llmcontract.OutputContract{
 			ID:         "schema.v1",
-			SchemaHash: lmStudioTestSchemaHash,
+			SchemaHash: llmcontract.SchemaHash(schema),
 			Strict:     true,
-			JSONSchema: json.RawMessage(`{"type":"object"}`),
+			JSONSchema: schema,
 		},
 	})
 	if security.Code(err) != "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED" || security.StatusCode(err) != http.StatusUnprocessableEntity {

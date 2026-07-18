@@ -2,6 +2,8 @@ package llmcontract
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -49,6 +51,10 @@ func ValidateOutputContract(contract *OutputContract) error {
 	if len(contract.JSONSchema) == 0 || len(contract.JSONSchema) > MaxJSONSchemaBytes {
 		return invalidOutputContract("outputContract.jsonSchema", "objeto JSON de ate 64 KiB")
 	}
+	actualHash := SchemaHash(contract.JSONSchema)
+	if contract.SchemaHash != actualHash {
+		return invalidOutputContract("outputContract.schemaHash", "hash nao corresponde a jsonSchema")
+	}
 
 	decoder := json.NewDecoder(bytes.NewReader(contract.JSONSchema))
 	decoder.UseNumber()
@@ -68,6 +74,23 @@ func ValidateOutputContract(contract *OutputContract) error {
 		return invalidOutputContract("outputContract.jsonSchema", "ate 256 propriedades declaradas")
 	}
 	return nil
+}
+
+// SchemaHash calculates the canonical contract digest used by consumers. The
+// schema must already be serialized canonically; surrounding whitespace is
+// ignored consistently with PocketKernel.
+func SchemaHash(schema json.RawMessage) string {
+	canonical := bytes.TrimSpace(schema)
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err == nil {
+		if marshaled, err := json.Marshal(value); err == nil {
+			canonical = marshaled
+		}
+	}
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func UnsupportedOutputContract() error {

@@ -332,7 +332,7 @@ Request:
   },
   "outputContract": {
     "id": "pockettrace.AIValidatedEnrichment.v1",
-    "schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "schemaHash": "sha256:43d728077867a5329320fcfff2f07b4426097d99fb7b6c6adde5178f71ec1060",
     "strict": true,
     "jsonSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -356,12 +356,13 @@ Quando presente, `outputContract` exige os quatro campos abaixo:
 | Campo | Contrato |
 | --- | --- |
 | `id` | 1 a 128 bytes; comeca por alfanumerico e aceita apenas `A-Z`, `a-z`, `0-9`, `.`, `_` e `-`. Identifica nome e versao governados pelo consumidor. |
-| `schemaHash` | `sha256:` seguido por exatamente 64 hexadecimais minusculos. E metadata de governanca e nao e enviado ao provider. |
+| `schemaHash` | SHA-256 do `jsonSchema` canonico (objeto reserializado em JSON compacto com chaves ordenadas), no formato `sha256:` + 64 hexadecimais minusculos. Nao e enviado ao provider. |
 | `strict` | Precisa ser `true`. |
 | `jsonSchema` | Objeto JSON com no maximo 64 KiB, profundidade 16 e ate 256 propriedades somadas em todos os keywords `properties`. |
 
-O middleware valida somente o envelope e esses limites de seguranca. Ele nao
-recalcula `schemaHash`, nao decide a semantica do schema e nao valida o
+O middleware valida somente o envelope e esses limites de seguranca. Ele
+recalcula `schemaHash` sobre a forma canonica e rejeita divergencia antes do
+provider; nao decide a semantica do schema e nao valida o
 `outputText` contra o schema. O PocketKernel governa prompt, versao/hash e
 validacao estrutural; o PocketTrace define e valida seu schema de dominio. O
 middleware mantem credenciais e faz apenas a traducao de transporte:

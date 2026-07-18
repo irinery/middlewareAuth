@@ -352,7 +352,7 @@ func TestLLMResponsesUsesGenericHTTPContract(t *testing.T) {
 		"serviceTier":     "priority",
 		"outputContract": map[string]any{
 			"id":         "pockettrace.contract.v1",
-			"schemaHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"schemaHash": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
 			"strict":     true,
 			"jsonSchema": map[string]any{"type": "object", "additionalProperties": false},
 		},

@@ -18,8 +18,6 @@ import (
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
-const codexTestSchemaHash = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 func TestBuildCodexHeadersProtectsAuthorization(t *testing.T) {
 	headers := BuildCodexHeaders("internal-access", "account-1", "origin", []HeaderPair{
 		{Key: "Authorization", Value: "Bearer caller"},
@@ -44,7 +42,7 @@ func TestMarshalCodexWireRequestTranslatesOutputContract(t *testing.T) {
 		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
 		OutputContract: &llmcontract.OutputContract{
 			ID:         "pockettrace.AIValidatedEnrichment.v1",
-			SchemaHash: codexTestSchemaHash,
+			SchemaHash: llmcontract.SchemaHash(publicSchema),
 			Strict:     true,
 			JSONSchema: publicSchema,
 		},
@@ -63,14 +61,14 @@ func TestMarshalCodexWireRequestTranslatesOutputContract(t *testing.T) {
 		t.Fatalf("text=%#v", body["text"])
 	}
 	format := text["format"].(map[string]any)
-	if format["type"] != "json_schema" || format["name"] != "pockettrace_AIValidatedEnrichment_v1_0123456789abcdef" || format["strict"] != true {
+	if format["type"] != "json_schema" || format["name"] != llmcontract.ProviderSchemaName(request.OutputContract) || format["strict"] != true {
 		t.Fatalf("format=%#v", format)
 	}
 	schema := format["schema"].(map[string]any)
 	if _, exists := schema["$schema"]; exists || schema["$defs"] == nil || schema["properties"] == nil {
 		t.Fatalf("schema=%#v", schema)
 	}
-	if string(request.OutputContract.JSONSchema) != string(before) || request.OutputContract.SchemaHash != codexTestSchemaHash {
+	if string(request.OutputContract.JSONSchema) != string(before) || request.OutputContract.SchemaHash != llmcontract.SchemaHash(publicSchema) {
 		t.Fatalf("public contract mutated: %#v", request.OutputContract)
 	}
 	if _, exists := body["outputContract"]; exists || bytes.Contains(raw, []byte("schemaHash")) {
@@ -92,14 +90,15 @@ func TestCodexOutputContractRejectionUsesStableErrorAndDoesNotLogSchema(t *testi
 	defer slog.SetDefault(previousLogger)
 
 	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 1000}, server.Client())
+	schema := json.RawMessage(`{"type":"object","description":"` + canary + `"}`)
 	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account"}, CodexResponseRequest{
 		Model: "gpt-5.6-sol",
 		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
 		OutputContract: &llmcontract.OutputContract{
 			ID:         "schema.v1",
-			SchemaHash: codexTestSchemaHash,
+			SchemaHash: llmcontract.SchemaHash(schema),
 			Strict:     true,
-			JSONSchema: json.RawMessage(`{"type":"object","description":"` + canary + `"}`),
+			JSONSchema: schema,
 		},
 	}, CodexTransportOptions{})
 	if security.Code(err) != "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED" || security.StatusCode(err) != http.StatusUnprocessableEntity {
@@ -129,14 +128,15 @@ func TestCodexOutputContractReturnsOnlyBareJSONObject(t *testing.T) {
 			defer server.Close()
 
 			transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 1000}, server.Client())
+			schema := json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`)
 			response, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account"}, CodexResponseRequest{
 				Model: "gpt-5.6-sol",
 				Input: []CodexInputItem{{Role: "user", Content: "oi"}},
 				OutputContract: &llmcontract.OutputContract{
 					ID:         "schema.v1",
-					SchemaHash: codexTestSchemaHash,
+					SchemaHash: llmcontract.SchemaHash(schema),
 					Strict:     true,
-					JSONSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`),
+					JSONSchema: schema,
 				},
 			}, CodexTransportOptions{})
 			if test.wantError {

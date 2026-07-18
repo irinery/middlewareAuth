@@ -208,7 +208,7 @@ func TestLLMResponsesDispatchesInternallyWithoutControlFieldsReachingProvider(t 
 		"max_output_tokens":12000,
 		"outputContract":{
 			"id":"pockettrace.AIValidatedEnrichment.v1",
-			"schemaHash":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"schemaHash":"sha256:35de5b90eb8853f6f4ad33341674e3b0e7231c1d16d438cb52994be484c47d69",
 			"strict":true,
 			"jsonSchema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}
 		}
