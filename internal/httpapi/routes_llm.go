@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/irinery/middlewareAuth/internal/codex"
+	"github.com/irinery/middlewareAuth/internal/llmcontract"
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
@@ -75,6 +76,7 @@ type LLMProviderCapabilities struct {
 	SystemInstructions bool `json:"systemInstructions"`
 	Tools              bool `json:"tools"`
 	Store              bool `json:"store"`
+	OutputContract     bool `json:"outputContract"`
 }
 
 type llmLoginRequest struct {
@@ -144,7 +146,7 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, pro
 				Auth:         LLMProviderAuth{Required: true, Modes: []string{"oauth", "device_code"}, DefaultMode: "device_code", Fields: []LLMProviderAuthField{}},
 				Defaults:     LLMProviderDefaults{ProfileID: profileID, Model: defaultOpenAIModel},
 				Models:       openAIModels,
-				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: true, Intelligence: true, ReasoningEffort: true, ServiceTier: true, SystemInstructions: true, Tools: false, Store: true},
+				Capabilities: llmProviderCapabilities(providerOpenAI),
 			},
 			{
 				ID:    providerLMStudio,
@@ -160,7 +162,7 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, pro
 				},
 				Defaults:     LLMProviderDefaults{ProfileID: "default", Model: "local-model"},
 				Models:       []LLMProviderModel{},
-				Capabilities: LLMProviderCapabilities{Stream: true, Refresh: false, Intelligence: false, ReasoningEffort: false, SystemInstructions: true, Tools: false, Store: false},
+				Capabilities: llmProviderCapabilities(providerLMStudio),
 			},
 		},
 	})
@@ -555,7 +557,24 @@ func readLLMResponseRequest(w http.ResponseWriter, r *http.Request, maxBytes int
 	if err := json.Unmarshal(payload, &request); err != nil {
 		return "", "", codex.CodexResponseRequest{}, security.NewError("ERR_LLM_REQUEST_INVALID", "payload LLM invalido", http.StatusBadRequest)
 	}
+	if err := llmcontract.ValidateOutputContract(request.OutputContract); err != nil {
+		return "", "", codex.CodexResponseRequest{}, err
+	}
+	if request.OutputContract != nil && !llmProviderCapabilities(providerID).OutputContract {
+		return "", "", codex.CodexResponseRequest{}, llmcontract.UnsupportedOutputContract()
+	}
 	return providerID, profileID, request, nil
+}
+
+func llmProviderCapabilities(providerID string) LLMProviderCapabilities {
+	switch providerID {
+	case providerOpenAI:
+		return LLMProviderCapabilities{Stream: true, Refresh: true, Intelligence: true, ReasoningEffort: true, ServiceTier: true, SystemInstructions: true, Tools: false, Store: true, OutputContract: true}
+	case providerLMStudio:
+		return LLMProviderCapabilities{Stream: true, Refresh: false, Intelligence: false, ReasoningEffort: false, SystemInstructions: true, Tools: false, Store: false, OutputContract: true}
+	default:
+		return LLMProviderCapabilities{}
+	}
 }
 
 func normalizeLLMIdentity(providerID, profileID string) (string, string, error) {
@@ -592,6 +611,14 @@ func normalizeLLMError(err error) error {
 	switch security.Code(err) {
 	case "ERR_LLM_PROVIDER_UNKNOWN", "ERR_LLM_REQUEST_INVALID", "ERR_LLM_REFRESH_UNSUPPORTED":
 		return err
+	case "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED":
+		normalized := llmcontract.UnsupportedOutputContract()
+		for _, detail := range security.Public(err).Details {
+			if detail.Field == "provider_reason" && llmcontract.IsSafeOutputContractReason(detail.Reason) {
+				return security.WithDetail(normalized, detail.Field, detail.Reason)
+			}
+		}
+		return normalized
 	case "ERR_AUTH_PROFILE_NOT_FOUND", "ERR_CODEX_ACCOUNT_ID_MISSING":
 		return security.NewError("ERR_LLM_AUTH_REQUIRED", "autenticacao do provider necessaria", http.StatusUnauthorized)
 	case "ERR_CODEX_AUTH_REJECTED", "ERR_LMSTUDIO_AUTH_REJECTED":

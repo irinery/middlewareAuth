@@ -14,6 +14,7 @@ import (
 
 	"github.com/irinery/middlewareAuth/internal/auth"
 	"github.com/irinery/middlewareAuth/internal/config"
+	"github.com/irinery/middlewareAuth/internal/llmcontract"
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
@@ -125,8 +126,14 @@ func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.Store
 
 	var lastErr error
 	for attempt := 0; attempt <= options.MaxRetries; attempt++ {
-		response, retry, delay, err := t.sendOnce(ctx, credential, raw, options)
+		response, retry, delay, err := t.sendOnce(ctx, credential, raw, options, request.OutputContract != nil)
 		if err == nil {
+			if request.OutputContract != nil {
+				response.OutputText, err = llmcontract.NormalizeStructuredOutputText(response.OutputText)
+				if err != nil {
+					return nil, err
+				}
+			}
 			return response, nil
 		}
 		lastErr = err
@@ -144,7 +151,7 @@ func (t *Transport) SendCodexResponse(ctx context.Context, credential auth.Store
 	return nil, lastErr
 }
 
-func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCredential, raw []byte, options CodexTransportOptions) (*CodexResponseStream, bool, time.Duration, error) {
+func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCredential, raw []byte, options CodexTransportOptions, hasOutputContract bool) (*CodexResponseStream, bool, time.Duration, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(options.TimeoutMs)*time.Millisecond)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ResolveCodexResponsesURL(t.cfg.BaseURL, t.cfg.ResponsesPath), bytes.NewReader(raw))
@@ -170,7 +177,12 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		upstreamCode, upstreamMessage := readUpstreamError(resp.Body)
-		if upstreamCode != "" || upstreamMessage != "" {
+		if hasOutputContract {
+			slog.WarnContext(ctx, "codex_request_rejected",
+				slog.Int("status", resp.StatusCode),
+				slog.Bool("output_contract", true),
+			)
+		} else if upstreamCode != "" || upstreamMessage != "" {
 			slog.WarnContext(ctx, "codex_request_rejected",
 				slog.Int("status", resp.StatusCode),
 				slog.String("upstream_code", upstreamCode),
@@ -189,6 +201,12 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 			return nil, true, delay, security.NewError("ERR_CODEX_HTTP_FAILED", "Codex indisponivel", http.StatusBadGateway)
 		default:
 			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+				if isUsageLimitRejection(upstreamCode, upstreamMessage) {
+					return nil, false, 0, security.NewError("ERR_CODEX_RATE_LIMITED", "Codex atingiu limite de uso", http.StatusTooManyRequests)
+				}
+				if hasOutputContract {
+					return nil, false, 0, llmcontract.UnsupportedOutputContractWithReason(classifyOutputContractRejection(upstreamCode, upstreamMessage))
+				}
 				rejected := security.NewError("ERR_CODEX_REQUEST_INVALID", "Codex recusou o request", http.StatusBadRequest)
 				if detail := upstreamErrorDetail(upstreamCode, upstreamMessage); detail != "" {
 					rejected = security.WithDetail(rejected, "provider", detail)
@@ -199,6 +217,30 @@ func (t *Transport) sendOnce(ctx context.Context, credential auth.StoredOAuthCre
 		}
 	}
 	return parseResponse(resp)
+}
+
+func classifyOutputContractRejection(code, message string) string {
+	value := strings.ToLower(code + " " + message)
+	for _, candidate := range []struct {
+		needle string
+		reason string
+	}{
+		{"text.format", "text_format"},
+		{"response_format", "response_format"},
+		{"json_schema", "json_schema"},
+		{"schema", "schema"},
+		{"max_output_tokens", "max_output_tokens"},
+		{"tools", "tools"},
+		{"include", "include"},
+	} {
+		if strings.Contains(value, candidate.needle) {
+			return candidate.reason
+		}
+	}
+	if strings.TrimSpace(code) != "" {
+		return "provider_code"
+	}
+	return "request_rejected"
 }
 
 type codexWireContent struct {
@@ -224,6 +266,18 @@ type codexWireRequest struct {
 	Stream            bool                  `json:"stream"`
 	Include           []string              `json:"include"`
 	PromptCacheKey    string                `json:"prompt_cache_key,omitempty"`
+	Text              *codexWireTextConfig  `json:"text,omitempty"`
+}
+
+type codexWireTextConfig struct {
+	Format codexWireJSONSchemaFormat `json:"format"`
+}
+
+type codexWireJSONSchemaFormat struct {
+	Type   string          `json:"type"`
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // marshalCodexWireRequest adapts the stable MiddlewareAuth contract to the
@@ -264,6 +318,18 @@ func marshalCodexWireRequest(request CodexResponseRequest, options CodexTranspor
 		Include:           []string{"reasoning.encrypted_content"},
 		PromptCacheKey:    options.SessionID,
 	}
+	if contract := request.OutputContract; contract != nil {
+		providerSchema, err := llmcontract.ProviderJSONSchema(contract)
+		if err != nil {
+			return nil, err
+		}
+		wire.Text = &codexWireTextConfig{Format: codexWireJSONSchemaFormat{
+			Type:   "json_schema",
+			Name:   llmcontract.ProviderSchemaName(contract),
+			Strict: contract.Strict,
+			Schema: providerSchema,
+		}}
+	}
 	raw, err := json.Marshal(wire)
 	if err != nil || len(request.Extra) == 0 {
 		return raw, err
@@ -273,7 +339,7 @@ func marshalCodexWireRequest(request CodexResponseRequest, options CodexTranspor
 		return nil, err
 	}
 	for key, value := range request.Extra {
-		if _, protected := payload[key]; protected {
+		if _, protected := payload[key]; protected || codexUnsupportedPortableField(key) {
 			continue
 		}
 		payload[key] = value
@@ -281,26 +347,44 @@ func marshalCodexWireRequest(request CodexResponseRequest, options CodexTranspor
 	return json.Marshal(payload)
 }
 
+func codexUnsupportedPortableField(key string) bool {
+	switch key {
+	case "max_output_tokens":
+		// The public MiddlewareAuth contract accepts this portable budget, but
+		// ChatGPT's Codex responses endpoint does not expose that field.
+		return true
+	default:
+		return false
+	}
+}
+
 func readUpstreamError(body io.Reader) (string, string) {
 	raw, err := io.ReadAll(io.LimitReader(body, 32<<10))
 	if err != nil || len(raw) == 0 {
 		return "", ""
 	}
-	var envelope struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"error"`
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return "", safeUpstreamHint(raw)
 	}
-	if json.Unmarshal(raw, &envelope) != nil {
-		return "", ""
+	var code, message string
+	if nested, ok := payload["error"].(map[string]any); ok {
+		code = firstString(nested, "code", "type")
+		message = firstString(nested, "message", "detail")
+	} else if value, ok := payload["error"].(string); ok {
+		message = value
 	}
-	code := security.Redact(strings.TrimSpace(envelope.Error.Code))
-	message := security.Redact(strings.TrimSpace(envelope.Error.Message))
 	if code == "" {
-		code = security.Redact(strings.TrimSpace(envelope.Error.Type))
+		code = firstString(payload, "code", "type")
 	}
+	if message == "" {
+		message = firstString(payload, "message", "detail")
+	}
+	if code == "" && message == "" {
+		message = safeUpstreamHint(raw)
+	}
+	code = security.Redact(strings.TrimSpace(code))
+	message = security.Redact(strings.TrimSpace(message))
 	if len(code) > 120 {
 		code = code[:120]
 	}
@@ -308,6 +392,38 @@ func readUpstreamError(body io.Reader) (string, string) {
 		message = message[:500]
 	}
 	return code, message
+}
+
+func safeUpstreamHint(raw []byte) string {
+	value := strings.ToLower(string(raw))
+	for _, needle := range []string{"usage_limit", "usage limit", "hit your usage", "purchase more credits"} {
+		if strings.Contains(value, needle) {
+			return "usage_limit"
+		}
+	}
+	for _, needle := range []string{
+		"text.format", "response_format", "json_schema", "schema",
+		"max_output_tokens", "tools", "include",
+	} {
+		if strings.Contains(value, needle) {
+			return needle
+		}
+	}
+	return ""
+}
+
+func isUsageLimitRejection(code, message string) bool {
+	value := strings.ToLower(code + " " + message)
+	return strings.Contains(value, "usage_limit") || strings.Contains(value, "usage limit")
+}
+
+func firstString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func upstreamErrorDetail(code, message string) string {
@@ -382,6 +498,9 @@ func (t *Transport) defaults(options CodexTransportOptions) CodexTransportOption
 }
 
 func validateRequest(request CodexResponseRequest) error {
+	if err := llmcontract.ValidateOutputContract(request.OutputContract); err != nil {
+		return err
+	}
 	if request.Model == "" || len(request.Model) > 120 {
 		return security.WithDetail(security.NewError("ERR_CODEX_REQUEST_INVALID", "model Codex invalido", http.StatusBadRequest), "model", "obrigatorio e ate 120 caracteres")
 	}
@@ -489,7 +608,29 @@ func collectOutputText(events []CodexStreamEvent) string {
 			out.WriteString(text)
 		}
 	}
-	return out.String()
+	if out.Len() > 0 {
+		return out.String()
+	}
+	for _, event := range events {
+		if event.Type != "response.output_text.done" || event.Payload == "" {
+			continue
+		}
+		var payload map[string]any
+		if json.Unmarshal([]byte(event.Payload), &payload) == nil {
+			if text := directOutputText(payload); text != "" {
+				return text
+			}
+		}
+	}
+	for _, event := range events {
+		if event.Type != "response.completed" || event.Payload == "" {
+			continue
+		}
+		if text := outputTextFromJSON([]byte(event.Payload)); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func outputTextFromJSON(raw []byte) string {
@@ -497,11 +638,37 @@ func outputTextFromJSON(raw []byte) string {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return ""
 	}
-	if text, ok := payload["outputText"].(string); ok {
+	return outputTextFromPayload(payload)
+}
+
+func outputTextFromPayload(payload map[string]any) string {
+	if text := directOutputText(payload); text != "" {
 		return text
 	}
-	if text, ok := payload["output_text"].(string); ok {
-		return text
+	if response, ok := payload["response"].(map[string]any); ok {
+		if text := outputTextFromPayload(response); text != "" {
+			return text
+		}
+	}
+	output, _ := payload["output"].([]any)
+	for _, itemValue := range output {
+		item, _ := itemValue.(map[string]any)
+		content, _ := item["content"].([]any)
+		for _, contentValue := range content {
+			part, _ := contentValue.(map[string]any)
+			if text := directOutputText(part); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func directOutputText(payload map[string]any) string {
+	for _, key := range []string{"delta", "text", "output_text", "outputText"} {
+		if text, ok := payload[key].(string); ok && text != "" {
+			return text
+		}
 	}
 	return ""
 }

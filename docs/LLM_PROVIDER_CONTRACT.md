@@ -47,7 +47,9 @@ Requests com corpo tambem usam `Content-Type: application/json`. `projectId`, `p
 Enquanto `contractVersion` continuar em `middlewareauth.llm.v1`, estes nomes e
 significados sao estaveis: `providerId`, `projectId`, `profileId`,
 `authenticated`, `status`, `loginSessionId`, `events`, `responseId`, `usage`,
-`outputText`, `error.code` e `error.message`. Campos opcionais podem ser
+`outputText`, `outputContract.id`, `outputContract.schemaHash`,
+`outputContract.strict`, `outputContract.jsonSchema`, `error.code` e
+`error.message`. Campos opcionais podem ser
 omitidos quando nao se aplicam. Clientes precisam ignorar campos de resposta
 desconhecidos para aceitar adicoes compativeis no v1.
 
@@ -157,6 +159,7 @@ Resposta concluida:
         "intelligence": true,
         "reasoningEffort": true,
         "serviceTier": true,
+        "outputContract": true,
         "systemInstructions": true,
         "tools": false,
         "store": true
@@ -177,6 +180,7 @@ Semantica das capabilities:
 | `intelligence` | A UI pode enviar o seletor livre `intelligence`. |
 | `reasoningEffort` | A UI pode enviar `reasoning` ou o alias MCP `reasoningEffort`. |
 | `serviceTier` | A UI pode enviar um ID publicado em `models[].serviceTiers`; omitir usa o tier padrao. |
+| `outputContract` | O adapter aceita o envelope portavel `outputContract` e traduz para o wire do provider. O modelo ainda pode rejeitar structured output. |
 | `systemInstructions` | A UI pode enviar `instructions`. |
 | `tools` | A UI pode enviar `tools`. |
 | `store` | A UI pode oferecer o controle `store`. |
@@ -325,11 +329,64 @@ Request:
   "reasoning": {
     "effort": "medium",
     "summary": "auto"
+  },
+  "outputContract": {
+    "id": "pockettrace.AIValidatedEnrichment.v1",
+    "schemaHash": "sha256:43d728077867a5329320fcfff2f07b4426097d99fb7b6c6adde5178f71ec1060",
+    "strict": true,
+    "jsonSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "summary": { "type": "string" }
+      },
+      "required": ["summary"],
+      "additionalProperties": false
+    }
   }
 }
 ```
 
-`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning`, `serviceTier` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O middleware converte `serviceTier` para o campo provider-specific `service_tier`. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
+`providerId`, `profileId`, `model` e `input` sao obrigatorios. `instructions`, `stream`, `store`, `intelligence`, `reasoning`, `serviceTier`, `max_output_tokens`, `outputContract` e `tools` sao opcionais e so devem ser enviados quando a capability correspondente permitir. O middleware converte `serviceTier` para o campo provider-specific `service_tier`. `max_output_tokens` e um limite portatil: o adapter o encaminha somente quando o wire do provider oferece esse controle; no endpoint Codex autenticado ele e consumido e omitido porque o upstream nao aceita esse parametro. O model e uma string livre para nao bloquear novos modelos. Campos adicionais podem ser enviados pelo HTTP no top-level e pelo MCP dentro de `extra`; adapters ignoram ou encaminham esses campos conforme sua implementacao.
+
+### Output contract portavel
+
+Quando presente, `outputContract` exige os quatro campos abaixo:
+
+| Campo | Contrato |
+| --- | --- |
+| `id` | 1 a 128 bytes; comeca por alfanumerico e aceita apenas `A-Z`, `a-z`, `0-9`, `.`, `_` e `-`. Identifica nome e versao governados pelo consumidor. |
+| `schemaHash` | SHA-256 do `jsonSchema` canonico (objeto reserializado em JSON compacto com chaves ordenadas), no formato `sha256:` + 64 hexadecimais minusculos. Nao e enviado ao provider. |
+| `strict` | Precisa ser `true`. |
+| `jsonSchema` | Objeto JSON com no maximo 64 KiB, profundidade 16 e ate 256 propriedades somadas em todos os keywords `properties`. |
+
+O middleware valida somente o envelope e esses limites de seguranca. Ele
+recalcula `schemaHash` sobre a forma canonica e rejeita divergencia antes do
+provider; nao decide a semantica do schema e nao valida o
+`outputText` contra o schema. O PocketKernel governa prompt, versao/hash e
+validacao estrutural; o PocketTrace define e valida seu schema de dominio. O
+middleware mantem credenciais e faz apenas a traducao de transporte:
+
+- Codex/OpenAI Responses: `text.format={type:"json_schema",name,strict,schema}`;
+- LM Studio Chat Completions: `response_format={type:"json_schema",json_schema:{name,strict,schema}}`.
+
+O nome provider-specific e derivado de `id` e recebe um sufixo do hash quando
+precisa ser normalizado ou truncado. `schemaHash` e `outputContract` nunca sao
+repassados como campos extras. O `jsonSchema` publico e o `schemaHash` nao sao
+mutados. Na copia de transporte, os adapters removem apenas o keyword raiz
+`$schema`, que identifica o dialect mas nao faz parte do subset Structured
+Outputs. `$defs`, `$ref`, `anyOf` com `null`, `const`, `minLength`, `maxLength`,
+`minItems` e `maxItems` sao preservados no wire. O schema bruto e mensagens do
+provider que possam repeti-lo nao entram em logs.
+
+Quando `outputContract` esta presente, um HTTP 200 so e devolvido se
+`outputText` contiver exclusivamente um objeto JSON valido. Espacos externos
+sao removidos; prose, Markdown fence, array, primitivo e resposta vazia viram
+`ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED` (422). Essa verificacao e apenas sintatica:
+`outputText` continua sendo string no envelope normalizado e o PocketKernel a
+decodifica como objeto antes de validar contra `jsonSchema`. Se o
+transporte ou modelo recusar structured output, o mesmo codigo 422 e usado. O
+request antigo, sem `outputContract`, continua inalterado.
 
 Resposta normalizada:
 
@@ -338,7 +395,7 @@ Resposta normalizada:
   "events": [
     {
       "type": "response.output_text.delta",
-      "payload": "{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}"
+      "payload": "{\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"summary\\\":\\\"ok\\\"}\"}"
     },
     { "type": "done" }
   ],
@@ -348,7 +405,7 @@ Resposta normalizada:
     "outputTokens": 1,
     "totalTokens": 11
   },
-  "outputText": "ok"
+  "outputText": "{\"summary\":\"ok\"}"
 }
 ```
 
@@ -376,6 +433,7 @@ Codigos publicos:
 | `ERR_LLM_AUTH_EXPIRED` | 401 | Reautenticar. |
 | `ERR_LLM_REFRESH_UNSUPPORTED` | 400 | Ocultar refresh; o catalogo deve publicar `refresh=false`. |
 | `ERR_LLM_REQUEST_INVALID` | 400/413 | Corrigir ou limitar payload. |
+| `ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED` | 422 | Trocar modelo/provider ou executar fallback sem structured output conforme a politica do consumidor. |
 | `ERR_LLM_PROVIDER_UNAVAILABLE` | 408/502/504 | Acionar fallback local do consumidor. `408` indica cancelamento, `504` timeout e `502` indisponibilidade/falha 5xx do provider. |
 | `ERR_LLM_RATE_LIMITED` | 429 | Aplicar retry/backoff no consumidor. |
 | `ERR_LLM_RESPONSE_EMPTY` | 502 | Tratar como falha transitoria/fallback. |

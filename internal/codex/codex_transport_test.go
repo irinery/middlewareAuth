@@ -1,9 +1,11 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/irinery/middlewareAuth/internal/auth"
 	"github.com/irinery/middlewareAuth/internal/config"
+	"github.com/irinery/middlewareAuth/internal/llmcontract"
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
@@ -28,6 +31,188 @@ func TestBuildCodexHeadersProtectsAuthorization(t *testing.T) {
 	}
 	if got := headers.Get("X-Test"); got != "ok" {
 		t.Fatalf("X-Test = %q", got)
+	}
+}
+
+func TestMarshalCodexWireRequestTranslatesOutputContract(t *testing.T) {
+	publicSchema := json.RawMessage(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$defs":{"value":{"anyOf":[{"type":"string","minLength":1,"maxLength":120},{"type":"null"}]}},"type":"object","properties":{"kind":{"const":"validated"},"value":{"$ref":"#/$defs/value"},"items":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":8}},"required":["kind","value","items"],"additionalProperties":false}`)
+	before := append([]byte(nil), publicSchema...)
+	request := CodexResponseRequest{
+		Model: "gpt-5.6-sol",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+		OutputContract: &llmcontract.OutputContract{
+			ID:         "pockettrace.AIValidatedEnrichment.v1",
+			SchemaHash: llmcontract.SchemaHash(publicSchema),
+			Strict:     true,
+			JSONSchema: publicSchema,
+		},
+		Extra: map[string]any{"text": "must-not-override", "max_output_tokens": float64(12000)},
+	}
+	raw, err := marshalCodexWireRequest(request, CodexTransportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	text, ok := body["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("text=%#v", body["text"])
+	}
+	format := text["format"].(map[string]any)
+	if format["type"] != "json_schema" || format["name"] != llmcontract.ProviderSchemaName(request.OutputContract) || format["strict"] != true {
+		t.Fatalf("format=%#v", format)
+	}
+	schema := format["schema"].(map[string]any)
+	if _, exists := schema["$schema"]; exists || schema["$defs"] == nil || schema["properties"] == nil {
+		t.Fatalf("schema=%#v", schema)
+	}
+	if string(request.OutputContract.JSONSchema) != string(before) || request.OutputContract.SchemaHash != llmcontract.SchemaHash(publicSchema) {
+		t.Fatalf("public contract mutated: %#v", request.OutputContract)
+	}
+	if _, exists := body["outputContract"]; exists || bytes.Contains(raw, []byte("schemaHash")) {
+		t.Fatalf("portable metadata leaked to Codex wire: %s", raw)
+	}
+	if _, exists := body["max_output_tokens"]; exists {
+		t.Fatalf("unsupported portable budget leaked to Codex wire: %s", raw)
+	}
+}
+
+func TestCodexOutputContractRejectionUsesStableErrorAndDoesNotLogSchema(t *testing.T) {
+	const canary = "raw-schema-log-canary"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"unsupported_response_format","message":"schema rejected: ` + canary + `"}}`))
+	}))
+	defer server.Close()
+
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 1000}, server.Client())
+	schema := json.RawMessage(`{"type":"object","description":"` + canary + `"}`)
+	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account"}, CodexResponseRequest{
+		Model: "gpt-5.6-sol",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+		OutputContract: &llmcontract.OutputContract{
+			ID:         "schema.v1",
+			SchemaHash: llmcontract.SchemaHash(schema),
+			Strict:     true,
+			JSONSchema: schema,
+		},
+	}, CodexTransportOptions{})
+	if security.Code(err) != "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED" || security.StatusCode(err) != http.StatusUnprocessableEntity {
+		t.Fatalf("error=%v code=%s status=%d", err, security.Code(err), security.StatusCode(err))
+	}
+	if strings.Contains(logs.String(), canary) || strings.Contains(logs.String(), `"schema"`) {
+		t.Fatalf("schema leaked to logs: %s", logs.String())
+	}
+}
+
+func TestCodexOutputContractReturnsOnlyBareJSONObject(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		outputText string
+		wantError  bool
+	}{
+		{name: "object", outputText: `{"summary":"ok"}`},
+		{name: "fenced", outputText: "```json\n{\"summary\":\"ok\"}\n```", wantError: true},
+		{name: "prose", outputText: `Resultado: {"summary":"ok"}`, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				payload, _ := json.Marshal(map[string]any{"type": "response.output_text.delta", "delta": test.outputText})
+				_, _ = w.Write([]byte("event: response.output_text.delta\ndata: " + string(payload) + "\n\n"))
+			}))
+			defer server.Close()
+
+			transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 1000}, server.Client())
+			schema := json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`)
+			response, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account"}, CodexResponseRequest{
+				Model: "gpt-5.6-sol",
+				Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+				OutputContract: &llmcontract.OutputContract{
+					ID:         "schema.v1",
+					SchemaHash: llmcontract.SchemaHash(schema),
+					Strict:     true,
+					JSONSchema: schema,
+				},
+			}, CodexTransportOptions{})
+			if test.wantError {
+				if security.Code(err) != "ERR_LLM_OUTPUT_CONTRACT_UNSUPPORTED" || response != nil {
+					t.Fatalf("response=%#v err=%v code=%s", response, err, security.Code(err))
+				}
+				return
+			}
+			if err != nil || response.OutputText != test.outputText {
+				t.Fatalf("response=%#v err=%v", response, err)
+			}
+		})
+	}
+}
+
+func TestCollectOutputTextFallsBackToStructuredCompletionEvents(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []CodexStreamEvent
+	}{
+		{
+			name: "output text done",
+			events: []CodexStreamEvent{{
+				Type:    "response.output_text.done",
+				Payload: `{"type":"response.output_text.done","text":"{\"summary\":\"ok\"}"}`,
+			}},
+		},
+		{
+			name: "response completed",
+			events: []CodexStreamEvent{{
+				Type: "response.completed",
+				Payload: `{"type":"response.completed","response":{"output":[{"type":"message","content":[` +
+					`{"type":"output_text","text":"{\"summary\":\"ok\"}"}]}]}}`,
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := collectOutputText(test.events); got != `{"summary":"ok"}` {
+				t.Fatalf("collectOutputText() = %q", got)
+			}
+		})
+	}
+}
+
+func TestReadUpstreamErrorSupportsTopLevelDetail(t *testing.T) {
+	code, message := readUpstreamError(strings.NewReader(`{"detail":"Unsupported parameter: text.format"}`))
+	if code != "" || message != "Unsupported parameter: text.format" {
+		t.Fatalf("code=%q message=%q", code, message)
+	}
+}
+
+func TestReadUpstreamErrorClassifiesNonJSONWithoutReturningBody(t *testing.T) {
+	code, message := readUpstreamError(strings.NewReader(`invalid request containing text.format and secret-canary`))
+	if code != "" || message != "text.format" {
+		t.Fatalf("code=%q message=%q", code, message)
+	}
+}
+
+func TestCodexUsageLimitReturnedAsHTTP400IsRateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("You've hit your usage limit. Purchase more credits."))
+	}))
+	defer server.Close()
+
+	transport := NewTransport(config.CodexConfig{BaseURL: server.URL, ResponsesPath: "/codex/responses", RequestTimeoutMs: 1000}, server.Client())
+	_, err := transport.SendCodexResponse(context.Background(), auth.StoredOAuthCredential{Access: "access", AccountID: "account"}, CodexResponseRequest{
+		Model: "gpt-5.6-terra",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+	}, CodexTransportOptions{})
+	if security.Code(err) != "ERR_CODEX_RATE_LIMITED" || security.StatusCode(err) != http.StatusTooManyRequests {
+		t.Fatalf("err=%v code=%s status=%d", err, security.Code(err), security.StatusCode(err))
 	}
 }
 

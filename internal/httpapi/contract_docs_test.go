@@ -64,7 +64,7 @@ func TestCanonicalContractFixtureIsCompleteAndContainsNoRealSecret(t *testing.T)
 	}
 
 	errors, ok := fixture["errors"].(map[string]any)
-	if !ok || len(errors) != 9 {
+	if !ok || len(errors) != 10 {
 		t.Fatalf("catalogo de erros incompleto: %#v", fixture["errors"])
 	}
 	mcp := fixture["mcp"].(map[string]any)

@@ -58,6 +58,31 @@ func TestCodexResponsesUsesMiddlewareTokenAndNormalizesURL(t *testing.T) {
 	}
 }
 
+func TestCodexResponseRequestMarshalsPortableOutputContract(t *testing.T) {
+	raw, err := json.Marshal(CodexResponseRequest{
+		Model: "gpt-5.6-sol",
+		Input: []CodexInputItem{{Role: "user", Content: "oi"}},
+		OutputContract: &OutputContract{
+			ID:         "pockettrace.contract.v1",
+			SchemaHash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Strict:     true,
+			JSONSchema: json.RawMessage(`{"type":"object"}`),
+		},
+		Extra: map[string]any{"outputContract": "must-not-override"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	contract, ok := body["outputContract"].(map[string]any)
+	if !ok || contract["id"] != "pockettrace.contract.v1" || contract["strict"] != true {
+		t.Fatalf("outputContract=%#v body=%s", body["outputContract"], raw)
+	}
+}
+
 func TestClientMapsUnauthorized(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

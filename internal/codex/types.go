@@ -1,17 +1,22 @@
 package codex
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/irinery/middlewareAuth/internal/llmcontract"
+)
 
 type CodexResponseRequest struct {
-	Model        string                `json:"model"`
-	Intelligence string                `json:"intelligence,omitempty"`
-	Instructions string                `json:"instructions,omitempty"`
-	Input        []CodexInputItem      `json:"input"`
-	Stream       bool                  `json:"stream"`
-	Store        bool                  `json:"store"`
-	Reasoning    *CodexReasoningConfig `json:"reasoning,omitempty"`
-	Tools        []CodexToolDefinition `json:"tools,omitempty"`
-	Extra        map[string]any        `json:"-"`
+	Model          string                      `json:"model"`
+	Intelligence   string                      `json:"intelligence,omitempty"`
+	Instructions   string                      `json:"instructions,omitempty"`
+	Input          []CodexInputItem            `json:"input"`
+	Stream         bool                        `json:"stream"`
+	Store          bool                        `json:"store"`
+	Reasoning      *CodexReasoningConfig       `json:"reasoning,omitempty"`
+	Tools          []CodexToolDefinition       `json:"tools,omitempty"`
+	OutputContract *llmcontract.OutputContract `json:"outputContract,omitempty"`
+	Extra          map[string]any              `json:"-"`
 }
 
 type CodexInputItem struct {
@@ -118,7 +123,7 @@ func (r *CodexResponseRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	for _, key := range []string{"model", "intelligence", "instructions", "input", "stream", "store", "reasoning", "tools"} {
+	for _, key := range []string{"model", "intelligence", "instructions", "input", "stream", "store", "reasoning", "tools", "outputContract"} {
 		delete(raw, key)
 	}
 	*r = CodexResponseRequest(known)

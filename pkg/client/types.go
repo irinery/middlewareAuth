@@ -33,15 +33,23 @@ type RefreshRequest struct {
 }
 
 type CodexResponseRequest struct {
-	Model        string                `json:"model"`
-	Intelligence string                `json:"intelligence,omitempty"`
-	Instructions string                `json:"instructions,omitempty"`
-	Input        []CodexInputItem      `json:"input"`
-	Stream       bool                  `json:"stream"`
-	Store        bool                  `json:"store"`
-	Reasoning    *CodexReasoningConfig `json:"reasoning,omitempty"`
-	Tools        []CodexToolDefinition `json:"tools,omitempty"`
-	Extra        map[string]any        `json:"-"`
+	Model          string                `json:"model"`
+	Intelligence   string                `json:"intelligence,omitempty"`
+	Instructions   string                `json:"instructions,omitempty"`
+	Input          []CodexInputItem      `json:"input"`
+	Stream         bool                  `json:"stream"`
+	Store          bool                  `json:"store"`
+	Reasoning      *CodexReasoningConfig `json:"reasoning,omitempty"`
+	Tools          []CodexToolDefinition `json:"tools,omitempty"`
+	OutputContract *OutputContract       `json:"outputContract,omitempty"`
+	Extra          map[string]any        `json:"-"`
+}
+
+type OutputContract struct {
+	ID         string          `json:"id"`
+	SchemaHash string          `json:"schemaHash"`
+	Strict     bool            `json:"strict"`
+	JSONSchema json.RawMessage `json:"jsonSchema"`
 }
 
 type CodexInputItem struct {
