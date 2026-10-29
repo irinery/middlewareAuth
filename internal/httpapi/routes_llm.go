@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	providerOpenAI   = "openai"
-	providerLMStudio = "lmstudio"
+	providerOpenAI     = "openai"
+	providerLMStudio   = "lmstudio"
+	providerAnthropic  = "anthropic"
+	providerOpenRouter = "openrouter"
 )
 
 type LLMProviderCatalogResponse struct {
@@ -163,6 +165,23 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, pro
 				Defaults:     LLMProviderDefaults{ProfileID: "default", Model: "local-model"},
 				Models:       []LLMProviderModel{},
 				Capabilities: llmProviderCapabilities(providerLMStudio),
+			},
+			{
+				ID: providerAnthropic, Title: "Claude (API)",
+				Auth: LLMProviderAuth{Required: true, Modes: []string{"api_key"}, DefaultMode: "api_key", Fields: []LLMProviderAuthField{
+					{ID: "apiKey", Title: "Claude API key", Type: "password", Required: true, Secret: true},
+					{ID: "workspaceId", Title: "Workspace ID", Type: "text", Required: false, Secret: false},
+				}},
+				Defaults: LLMProviderDefaults{ProfileID: profileID, Model: ""}, Models: []LLMProviderModel{},
+				Capabilities: llmProviderCapabilities(providerAnthropic),
+			},
+			{
+				ID: providerOpenRouter, Title: "OpenRouter",
+				Auth: LLMProviderAuth{Required: true, Modes: []string{"api_key"}, DefaultMode: "api_key", Fields: []LLMProviderAuthField{
+					{ID: "apiKey", Title: "OpenRouter API key", Type: "password", Required: true, Secret: true},
+				}},
+				Defaults: LLMProviderDefaults{ProfileID: profileID, Model: ""}, Models: []LLMProviderModel{},
+				Capabilities: llmProviderCapabilities(providerOpenRouter),
 			},
 		},
 	})
@@ -341,6 +360,17 @@ func (h *Handler) handleLLMLogin(w http.ResponseWriter, r *http.Request, project
 			ModelCount:     configured.ModelCount,
 			SavedAt:        configured.SavedAt,
 		})
+	case providerAnthropic, providerOpenRouter:
+		if input.Mode != "" && input.Mode != "api_key" {
+			writeLLMError(w, security.NewError("ERR_LLM_REQUEST_INVALID", "modo de login nao suportado pelo provider", http.StatusBadRequest))
+			return
+		}
+		savedAt, err := h.configureCloudKey(r.Context(), providerID, projectID, profileID, stringLLMAuthField(input.AuthFields, "apiKey"), stringLLMAuthField(input.AuthFields, "workspaceId"))
+		if err != nil {
+			writeLLMError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, LLMLoginResponse{ProviderID: providerID, ProjectID: projectID, ProfileID: profileID, LoginSessionID: providerID + "-api-key-" + profileID, Mode: "api_key", Status: "authenticated", Authenticated: true, SavedAt: savedAt})
 	}
 }
 
@@ -375,6 +405,23 @@ func (h *Handler) handleLLMLoginStatus(w http.ResponseWriter, r *http.Request, p
 			BaseURL:        status.BaseURL,
 			AccountID:      status.AccountID,
 		})
+		return
+	}
+	if providerID == providerAnthropic || providerID == providerOpenRouter {
+		if sessionID != providerID+"-api-key-"+profileID {
+			writeLLMError(w, security.NewError("ERR_LLM_REQUEST_INVALID", "loginSessionId invalido", http.StatusBadRequest))
+			return
+		}
+		status, err := h.llmStatus(r.Context(), providerID, projectID, profileID)
+		if err != nil {
+			writeLLMError(w, err)
+			return
+		}
+		state := "pending"
+		if status.Authenticated {
+			state = "authenticated"
+		}
+		writeJSON(w, http.StatusOK, LLMLoginResponse{ProviderID: providerID, ProjectID: projectID, ProfileID: profileID, LoginSessionID: sessionID, Mode: "api_key", Status: state, Authenticated: status.Authenticated})
 		return
 	}
 	session, err := h.loginSessionResponse(projectID, sessionID)
@@ -460,6 +507,15 @@ func (h *Handler) llmStatus(ctx context.Context, providerID, projectID, profileI
 			AccountID:     status.AccountID,
 			BaseURL:       status.BaseURL,
 		}, nil
+	case providerAnthropic, providerOpenRouter:
+		credential, err := h.store.LoadProviderCredential(ctx, providerID, projectID, profileID)
+		if security.Code(err) == "ERR_AUTH_PROFILE_NOT_FOUND" {
+			return &LLMStatusResponse{ProviderID: providerID, ProjectID: projectID, ProfileID: profileID}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &LLMStatusResponse{Authenticated: true, ProviderID: providerID, ProjectID: projectID, ProfileID: profileID, AccountID: credential.AccountID}, nil
 	default:
 		return nil, unknownProviderError(providerID)
 	}
@@ -509,6 +565,8 @@ func (h *Handler) handleLLMResponses(w http.ResponseWriter, r *http.Request, pro
 		response, err = h.sendCodexResponse(r.Context(), projectID, profileID, request)
 	case providerLMStudio:
 		response, err = h.sendLMStudioResponse(r.Context(), projectID, profileID, request)
+	case providerAnthropic, providerOpenRouter:
+		response, err = h.sendCloudResponse(r.Context(), providerID, projectID, profileID, request)
 	default:
 		err = unknownProviderError(providerID)
 	}
@@ -572,6 +630,10 @@ func llmProviderCapabilities(providerID string) LLMProviderCapabilities {
 		return LLMProviderCapabilities{Stream: true, Refresh: true, Intelligence: true, ReasoningEffort: true, ServiceTier: true, SystemInstructions: true, Tools: false, Store: true, OutputContract: true}
 	case providerLMStudio:
 		return LLMProviderCapabilities{Stream: true, Refresh: false, Intelligence: false, ReasoningEffort: false, SystemInstructions: true, Tools: false, Store: false, OutputContract: true}
+	case providerAnthropic:
+		return LLMProviderCapabilities{Stream: true, Refresh: false, Intelligence: false, ReasoningEffort: true, SystemInstructions: true, Tools: false, Store: false, OutputContract: true}
+	case providerOpenRouter:
+		return LLMProviderCapabilities{Stream: true, Refresh: false, Intelligence: false, ReasoningEffort: false, SystemInstructions: true, Tools: false, Store: false, OutputContract: true}
 	default:
 		return LLMProviderCapabilities{}
 	}
@@ -580,7 +642,7 @@ func llmProviderCapabilities(providerID string) LLMProviderCapabilities {
 func normalizeLLMIdentity(providerID, profileID string) (string, string, error) {
 	providerID = strings.ToLower(strings.TrimSpace(providerID))
 	profileID = security.NormalizeProfileID(strings.TrimSpace(profileID))
-	if providerID != providerOpenAI && providerID != providerLMStudio {
+	if providerID != providerOpenAI && providerID != providerLMStudio && providerID != providerAnthropic && providerID != providerOpenRouter {
 		return "", "", unknownProviderError(providerID)
 	}
 	if !security.ValidProfileID(profileID) {
@@ -621,15 +683,17 @@ func normalizeLLMError(err error) error {
 		return normalized
 	case "ERR_AUTH_PROFILE_NOT_FOUND", "ERR_CODEX_ACCOUNT_ID_MISSING":
 		return security.NewError("ERR_LLM_AUTH_REQUIRED", "autenticacao do provider necessaria", http.StatusUnauthorized)
-	case "ERR_CODEX_AUTH_REJECTED", "ERR_LMSTUDIO_AUTH_REJECTED":
+	case "ERR_CODEX_AUTH_REJECTED", "ERR_LMSTUDIO_AUTH_REJECTED", "ERR_CLOUD_AUTH_REJECTED":
 		return security.NewError("ERR_LLM_AUTH_EXPIRED", "credencial do provider expirada ou invalida", http.StatusUnauthorized)
 	case "ERR_LOGIN_SESSION_EXPIRED":
 		return security.NewError("ERR_LLM_AUTH_EXPIRED", "sessao de autenticacao expirada", http.StatusUnauthorized)
 	case "ERR_LOGIN_SESSION_NOT_FOUND":
 		return security.NewError("ERR_LLM_REQUEST_INVALID", "sessao de autenticacao nao encontrada", http.StatusNotFound)
-	case "ERR_CODEX_RATE_LIMITED", "ERR_LMSTUDIO_RATE_LIMITED":
+	case "ERR_CODEX_RATE_LIMITED", "ERR_LMSTUDIO_RATE_LIMITED", "ERR_CLOUD_RATE_LIMITED":
 		return security.NewError("ERR_LLM_RATE_LIMITED", "provider aplicou rate limit", http.StatusTooManyRequests)
-	case "ERR_CODEX_TIMEOUT", "ERR_LMSTUDIO_TIMEOUT":
+	case "ERR_CLOUD_RESPONSE_EMPTY":
+		return security.NewError("ERR_LLM_RESPONSE_EMPTY", "provider retornou resposta vazia", http.StatusBadGateway)
+	case "ERR_CODEX_TIMEOUT", "ERR_LMSTUDIO_TIMEOUT", "ERR_CLOUD_TIMEOUT":
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "timeout ao chamar provider LLM", http.StatusGatewayTimeout)
 	case "ERR_CONTEXT_CANCELLED":
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "request LLM cancelado", http.StatusRequestTimeout)
@@ -642,7 +706,7 @@ func normalizeLLMError(err error) error {
 	case "ERR_TOKEN_EXCHANGE_FAILED", "ERR_TOKEN_RESPONSE_INVALID":
 		return security.NewError("ERR_LLM_PROVIDER_UNAVAILABLE", "OpenAI recusou a troca final do login por token", http.StatusBadGateway)
 	case "ERR_INVALID_JSON", "ERR_PAYLOAD_TOO_LARGE", "ERR_INVALID_PROFILE_ID", "ERR_INVALID_PROVIDER_ID",
-		"ERR_CODEX_REQUEST_INVALID", "ERR_LMSTUDIO_REQUEST_INVALID", "ERR_LMSTUDIO_BASE_URL_INVALID", "ERR_LMSTUDIO_API_KEY_REQUIRED":
+		"ERR_CODEX_REQUEST_INVALID", "ERR_LMSTUDIO_REQUEST_INVALID", "ERR_LMSTUDIO_BASE_URL_INVALID", "ERR_LMSTUDIO_API_KEY_REQUIRED", "ERR_CLOUD_REQUEST_INVALID":
 		providerError := security.Public(err)
 		return &security.AppError{
 			Code:       "ERR_LLM_REQUEST_INVALID",

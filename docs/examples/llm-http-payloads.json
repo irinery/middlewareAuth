@@ -166,6 +166,85 @@
             "tools": false,
             "store": false
           }
+        },
+        {
+          "id": "anthropic",
+          "title": "Claude (API)",
+          "auth": {
+            "required": true,
+            "modes": [
+              "api_key"
+            ],
+            "defaultMode": "api_key",
+            "fields": [
+              {
+                "id": "apiKey",
+                "title": "Claude API key",
+                "type": "password",
+                "required": true,
+                "secret": true
+              },
+              {
+                "id": "workspaceId",
+                "title": "Workspace ID",
+                "type": "text",
+                "required": false,
+                "secret": false
+              }
+            ]
+          },
+          "defaults": {
+            "profileId": "default",
+            "model": ""
+          },
+          "models": [],
+          "capabilities": {
+            "stream": true,
+            "refresh": false,
+            "intelligence": false,
+            "reasoningEffort": true,
+            "serviceTier": false,
+            "outputContract": true,
+            "systemInstructions": true,
+            "tools": false,
+            "store": false
+          }
+        },
+        {
+          "id": "openrouter",
+          "title": "OpenRouter",
+          "auth": {
+            "required": true,
+            "modes": [
+              "api_key"
+            ],
+            "defaultMode": "api_key",
+            "fields": [
+              {
+                "id": "apiKey",
+                "title": "OpenRouter API key",
+                "type": "password",
+                "required": true,
+                "secret": true
+              }
+            ]
+          },
+          "defaults": {
+            "profileId": "default",
+            "model": ""
+          },
+          "models": [],
+          "capabilities": {
+            "stream": true,
+            "refresh": false,
+            "intelligence": false,
+            "reasoningEffort": false,
+            "serviceTier": false,
+            "outputContract": true,
+            "systemInstructions": true,
+            "tools": false,
+            "store": false
+          }
         }
       ]
     }
@@ -191,6 +270,23 @@
       "mode": "api_key",
       "authFields": {
         "baseUrl": "http://127.0.0.1:1234",
+        "apiKey": "<secret>"
+      }
+    },
+    "anthropicAPIKeyBody": {
+      "providerId": "anthropic",
+      "profileId": "default",
+      "mode": "api_key",
+      "authFields": {
+        "apiKey": "<secret>",
+        "workspaceId": "wrkspc_exemplo"
+      }
+    },
+    "openrouterAPIKeyBody": {
+      "providerId": "openrouter",
+      "profileId": "default",
+      "mode": "api_key",
+      "authFields": {
         "apiKey": "<secret>"
       }
     },
@@ -324,6 +420,30 @@
     }
   },
   "responses": {
+    "anthropicRequestBody": {
+      "providerId": "anthropic",
+      "profileId": "default",
+      "model": "claude-sonnet-4-5",
+      "input": [
+        {
+          "role": "user",
+          "content": "Responda ok"
+        }
+      ],
+      "max_output_tokens": 256
+    },
+    "openrouterRequestBody": {
+      "providerId": "openrouter",
+      "profileId": "default",
+      "model": "anthropic/claude-sonnet-4.5",
+      "input": [
+        {
+          "role": "user",
+          "content": "Responda ok"
+        }
+      ],
+      "max_output_tokens": 256
+    },
     "request": {
       "method": "POST",
       "path": "/v1/projects/pockettrace/llm/responses",

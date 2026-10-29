@@ -129,6 +129,22 @@ func (h *Handler) handleProjectRoute(w http.ResponseWriter, r *http.Request, pro
 		h.handleLLMProviders(w, r, projectID)
 		return
 	}
+	if len(rest) == 2 && rest[0] == "decisions" && rest[1] == "providers" && r.Method == http.MethodGet {
+		h.handleDecisionProviders(w, r, projectID)
+		return
+	}
+	if len(rest) == 2 && rest[0] == "decisions" && rest[1] == "login" && r.Method == http.MethodPost {
+		h.handleDecisionLogin(w, r, projectID)
+		return
+	}
+	if len(rest) == 2 && rest[0] == "decisions" && rest[1] == "status" && r.Method == http.MethodGet {
+		h.handleDecisionStatus(w, r, projectID)
+		return
+	}
+	if len(rest) == 2 && rest[0] == "decisions" && rest[1] == "evaluate" && r.Method == http.MethodPost {
+		h.handleDecisionEvaluate(w, r, projectID)
+		return
+	}
 	if len(rest) == 2 && rest[0] == "llm" && rest[1] == "login" && r.Method == http.MethodPost {
 		h.handleLLMLogin(w, r, projectID)
 		return

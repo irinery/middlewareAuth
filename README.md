@@ -18,6 +18,8 @@ Implementado:
 - identity JWT e refresh com lock por perfil;
 - transporte Codex HTTP/SSE com headers protegidos e retry;
 - API HTTP interna;
+- adapters Claude API e OpenRouter por API key no contrato LLM generico;
+- adapters de decisao TypeSafe Jev e OpenRouter Jev em contrato separado do catalogo de chat;
 - SDK Go em `pkg/client`;
 - auditoria/log redigido e healthcheck.
 
@@ -86,6 +88,10 @@ GET  http://localhost:18787/v1/projects/{projectId}/llm/login-sessions/{loginSes
 GET  http://localhost:18787/v1/projects/{projectId}/llm/status
 POST http://localhost:18787/v1/projects/{projectId}/llm/refresh
 POST http://localhost:18787/v1/projects/{projectId}/llm/responses
+GET  http://localhost:18787/v1/projects/{projectId}/decisions/providers?profileId={profileId}
+POST http://localhost:18787/v1/projects/{projectId}/decisions/login
+GET  http://localhost:18787/v1/projects/{projectId}/decisions/status?providerId={providerId}&profileId={profileId}
+POST http://localhost:18787/v1/projects/{projectId}/decisions/evaluate
 ```
 
 O contrato generico e seus payloads estao em [docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md). Rotas especificas continuam disponiveis para compatibilidade:
@@ -188,5 +194,11 @@ Detalhes e config de cliente: [docs/MCP.md](./docs/MCP.md).
 Para clientes MCP novos, use o contrato generico `llm_*` descrito em [docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md). As tools genericas chamam a API HTTP canonica; `openai_*` e `codex_responses` seguem disponiveis apenas por compatibilidade.
 O provider `lmstudio` usa API key local salva criptografada pelo middleware e fala com a API OpenAI-compatible do LM Studio.
 
+Claude API e OpenRouter usam o mesmo endpoint `llm/login` com `mode: "api_key"` e `authFields.apiKey`. Para Claude, `authFields.workspaceId` e opcional quando a chave precisa selecionar um workspace. O middleware valida a chave no provider antes de salva-la criptografada, e usa `providerId: "anthropic"` ou `"openrouter"` em `llm/responses`. O `model` e livre; use o ID da API Anthropic ou o slug `autor/modelo` do OpenRouter. Exemplos estao no contrato canonico.
+
+Credenciais de assinatura Claude Free/Pro/Max nao entram neste middleware. A Anthropic permite login da assinatura no Claude Code oficial, mas nao permite que aplicativos de terceiros armazenem os tokens ou encaminhem requisicoes com essas credenciais. Para usar a assinatura, execute o Claude Code oficial e autentique-se nele diretamente. Consulte a [politica de credenciais da Anthropic](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
+
 O catalogo `llm_providers` descobre os modelos OpenAI liberados para o perfil autenticado, incluindo esforcos e tiers como `Fast`. Para selecionar, use `llm_responses` com `providerId`, `model`, `reasoningEffort`/`reasoning` e `serviceTier`; o wrapper aceita valores livres e `extra` para seletores futuros do backend.
 O endpoint upstream usa `OPENAI_CODEX_MODELS_PATH=/codex/models` e `OPENAI_CODEX_CLIENT_VERSION=0.145.0` por default; ambos podem ser ajustados sem depender de uma instalacao local do Codex.
+
+TypeSafe Jev e OpenRouter Jev ficam na API separada de decisoes tipadas (`decisions/*`), sem aparecer em `llm_providers`. Configure a chave com `providerId: "typesafe-jev"` ou `"openrouter-jev"` e avalie `state` + `questions` em `decisions/evaluate`. O contrato canonico e [docs/DECISION_PROVIDER_CONTRACT.md](./docs/DECISION_PROVIDER_CONTRACT.md).

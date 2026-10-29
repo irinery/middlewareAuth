@@ -71,10 +71,10 @@ func TestLLMProvidersExposesCanonicalBlackBoxContract(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ContractVersion != "middlewareauth.llm.v1" || len(response.Providers) != 2 {
+	if response.ContractVersion != "middlewareauth.llm.v1" || len(response.Providers) != 4 {
 		t.Fatalf("response = %#v", response)
 	}
-	if response.Providers[0].ID != providerOpenAI || response.Providers[1].ID != providerLMStudio {
+	if response.Providers[0].ID != providerOpenAI || response.Providers[1].ID != providerLMStudio || response.Providers[2].ID != providerAnthropic || response.Providers[3].ID != providerOpenRouter {
 		t.Fatalf("providers = %#v", response.Providers)
 	}
 	if !response.Providers[0].Capabilities.Refresh || response.Providers[1].Capabilities.Refresh {

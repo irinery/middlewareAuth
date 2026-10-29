@@ -4,6 +4,8 @@ Versao do contrato: `middlewareauth.llm.v1`.
 
 Este arquivo e a fonte de verdade para aplicacoes que consomem o `middlewareAuth` por HTTP ou MCP. Os exemplos completos e prontos para fixture estao em [`examples/llm-http-payloads.json`](./examples/llm-http-payloads.json).
 
+Este catalogo inclui providers conversacionais, como Claude API e OpenRouter. Modelos de decisao tipada, como TypeSafe Jev e OpenRouter Jev, usam o contrato separado [`DECISION_PROVIDER_CONTRACT.md`](./DECISION_PROVIDER_CONTRACT.md) e nao aparecem em `llm/providers`.
+
 ## Limite de responsabilidade
 
 Cada projeto tem que funcionar sozinho. O `middlewareAuth` melhora a integracao entre os projetos, mas nunca pode ser dependencia bloqueante para build, testes ou funcionalidades locais de uma aplicacao consumidora.
@@ -219,6 +221,20 @@ API key configurada no middleware:
 }
 ```
 
+Claude API e OpenRouter seguem o mesmo formato:
+
+```json
+{"providerId":"anthropic","profileId":"default","mode":"api_key","authFields":{"apiKey":"<secret>","workspaceId":"wrkspc_exemplo"}}
+```
+
+```json
+{"providerId":"openrouter","profileId":"default","mode":"api_key","authFields":{"apiKey":"<secret>"}}
+```
+
+O `workspaceId` Claude e opcional para chaves vinculadas a um workspace e obrigatorio para chaves de multiplos workspaces. As chaves sao verificadas por `GET /v1/models?limit=1` na Anthropic e `GET /api/v1/key` no OpenRouter antes da persistencia criptografada. `models` fica vazio no catalogo desses dois providers: o consumidor informa o ID do modelo disponivel para sua conta. No OpenRouter o formato usual e `autor/modelo`.
+
+O `providerId: "anthropic"` representa a API do Claude com chave da Console. A assinatura Claude Free/Pro/Max nao e um modo de login deste middleware: a [documentacao da Anthropic](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) nao permite a aplicativos de terceiros armazenar tokens da assinatura nem intermediar requests com eles. O usuario pode autenticar a assinatura diretamente no binario oficial Claude Code.
+
 Resposta pendente:
 
 ```json
@@ -369,6 +385,8 @@ middleware mantem credenciais e faz apenas a traducao de transporte:
 
 - Codex/OpenAI Responses: `text.format={type:"json_schema",name,strict,schema}`;
 - LM Studio Chat Completions: `response_format={type:"json_schema",json_schema:{name,strict,schema}}`.
+- Claude Messages API: `output_config.format={type:"json_schema",schema}`;
+- OpenRouter Chat Completions: `response_format={type:"json_schema",json_schema:{name,strict,schema}}`.
 
 O nome provider-specific e derivado de `id` e recebe um sufixo do hash quando
 precisa ser normalizado ou truncado. `schemaHash` e `outputContract` nunca sao
