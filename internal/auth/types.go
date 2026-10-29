@@ -9,6 +9,7 @@ type StoredOAuthCredential struct {
 	Email           string `json:"email,omitempty"`
 	ChatGPTPlanType string `json:"chatgptPlanType,omitempty"`
 	BaseURL         string `json:"baseUrl,omitempty"`
+	WorkspaceID     string `json:"workspaceId,omitempty"`
 }
 
 type AuthProfileSaveResult struct {

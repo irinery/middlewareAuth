@@ -19,8 +19,9 @@ type Client struct {
 	httpClient      *http.Client
 	timeout         time.Duration
 
-	Auth  *AuthService
-	Codex *CodexService
+	Auth      *AuthService
+	Codex     *CodexService
+	Decisions *DecisionsService
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
@@ -68,6 +69,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}
 	c.Auth = &AuthService{client: c, defaultProjectID: options.ProjectID}
 	c.Codex = &CodexService{client: c, defaultProjectID: options.ProjectID}
+	c.Decisions = &DecisionsService{client: c, defaultProjectID: options.ProjectID}
 	return c, nil
 }
 

@@ -84,7 +84,7 @@ func TestCanonicalContractFixtureIsCompleteAndContainsNoRealSecret(t *testing.T)
 			t.Fatalf("fixture contem possivel segredo real: %q", match)
 		}
 	}
-	if count := strings.Count(string(raw), `"apiKey": "<secret>"`); count != 2 {
+	if count := strings.Count(string(raw), `"apiKey": "<secret>"`); count != 4 {
 		t.Fatalf("apiKey deve aparecer apenas como placeholder nos payloads HTTP/MCP; ocorrencias=%d", count)
 	}
 	if strings.Contains(string(raw), `"accessToken"`) || strings.Contains(string(raw), `"refreshToken"`) {

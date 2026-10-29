@@ -45,6 +45,51 @@ type CodexResponseRequest struct {
 	Extra          map[string]any        `json:"-"`
 }
 
+type DecisionProvider struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	DefaultModel string `json:"defaultModel"`
+}
+
+type DecisionProvidersResponse struct {
+	ContractVersion string             `json:"contractVersion"`
+	Providers       []DecisionProvider `json:"providers"`
+}
+
+type DecisionLoginRequest struct {
+	ProjectID  string `json:"-"`
+	ProviderID string `json:"providerId"`
+	ProfileID  string `json:"profileId,omitempty"`
+	APIKey     string `json:"apiKey"`
+}
+
+type DecisionStatus struct {
+	Authenticated bool   `json:"authenticated"`
+	ProviderID    string `json:"providerId"`
+	ProjectID     string `json:"projectId"`
+	ProfileID     string `json:"profileId"`
+	AccountID     string `json:"accountId,omitempty"`
+}
+
+type DecisionRequest struct {
+	ProjectID  string         `json:"-"`
+	ProviderID string         `json:"providerId"`
+	ProfileID  string         `json:"profileId,omitempty"`
+	Model      string         `json:"model,omitempty"`
+	State      any            `json:"state"`
+	Questions  map[string]any `json:"questions"`
+}
+
+type DecisionResponse struct {
+	ProviderID string          `json:"providerId"`
+	ProjectID  string          `json:"projectId"`
+	ProfileID  string          `json:"profileId"`
+	Model      string          `json:"model"`
+	ID         string          `json:"id,omitempty"`
+	Answers    json.RawMessage `json:"answers"`
+	Usage      json.RawMessage `json:"usage,omitempty"`
+}
+
 type OutputContract struct {
 	ID         string          `json:"id"`
 	SchemaHash string          `json:"schemaHash"`

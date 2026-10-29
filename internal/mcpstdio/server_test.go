@@ -12,6 +12,35 @@ import (
 
 const mcpTestToken = "mcp-test-token-with-32-characters"
 
+func TestCloudProviderMCPDefaults(t *testing.T) {
+	for _, providerID := range []string{"anthropic", "openrouter"} {
+		t.Run(providerID, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/projects/acme/llm/login" {
+					t.Errorf("path = %s", r.URL.Path)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["mode"] != "api_key" || body["providerId"] != providerID {
+					t.Errorf("body = %#v", body)
+				}
+				w.Write([]byte(`{"status":"authenticated","authenticated":true}`))
+			}))
+			defer httpServer.Close()
+			server := New(Options{BaseURL: httpServer.URL, MiddlewareToken: mcpTestToken, HTTPClient: httpServer.Client()})
+			if model := server.modelForProvider(map[string]any{}, providerID); model != "" {
+				t.Errorf("model padrao inesperado = %q", model)
+			}
+			_, failed := server.llmLoginStart(context.Background(), map[string]any{"providerId": providerID, "projectId": "acme", "authFields": map[string]any{"apiKey": "test-key"}})
+			if failed {
+				t.Fatal("login MCP falhou")
+			}
+		})
+	}
+}
+
 func TestServeInitializeAndToolsList(t *testing.T) {
 	server := New(Options{MiddlewareToken: mcpTestToken})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}

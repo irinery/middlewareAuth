@@ -34,6 +34,10 @@ Ferramentas expostas:
 ```text
 middleware_health
 llm_providers
+decision_providers
+decision_login
+decision_status
+decision_evaluate
 llm_login_start
 llm_login_status
 llm_status
@@ -50,6 +54,11 @@ Clientes novos devem usar `llm_*`. As ferramentas `openai_*` e
 `codex_responses` continuam apenas por compatibilidade. As tools genericas
 chamam `/v1/projects/{projectId}/llm/*`; autenticacao e dispatch de provider
 ficam no servidor HTTP canonico.
+
+Jev usa as ferramentas separadas `decision_*`, que chamam
+`/v1/projects/{projectId}/decisions/*`. TypeSafe Jev e OpenRouter Jev nao sao
+providers conversacionais e nao aparecem em `llm_providers`. Veja o contrato em
+[`DECISION_PROVIDER_CONTRACT.md`](./DECISION_PROVIDER_CONTRACT.md).
 
 Defaults MCP:
 

@@ -190,6 +190,14 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		return s.middlewareHealth(ctx)
 	case "llm_providers":
 		return s.llmProviders(ctx, args)
+	case "decision_providers":
+		return s.decisionProviders(ctx, args)
+	case "decision_login":
+		return s.decisionLogin(ctx, args)
+	case "decision_status":
+		return s.decisionStatus(ctx, args)
+	case "decision_evaluate":
+		return s.decisionEvaluate(ctx, args)
 	case "llm_login_start":
 		return s.llmLoginStart(ctx, args)
 	case "llm_login_status":
@@ -237,6 +245,73 @@ func (s *Server) llmProviders(ctx context.Context, args map[string]any) (string,
 	return marshalText(response), false
 }
 
+func (s *Server) decisionProviders(ctx context.Context, args map[string]any) (string, bool) {
+	projectID, ok := s.projectID(args)
+	if !ok {
+		return s.llmErrorText("ERR_DECISION_REQUEST_INVALID", "projectId obrigatorio", "", "", ""), true
+	}
+	profileID := s.profileIDForProvider(args, "")
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/decisions/providers?profileId=" + url.QueryEscape(profileID)
+	var response any
+	if err := s.doJSON(ctx, http.MethodGet, path, nil, &response, true); err != nil {
+		return s.llmErrorFromError(err, "", projectID, profileID), true
+	}
+	return marshalText(response), false
+}
+
+func (s *Server) decisionLogin(ctx context.Context, args map[string]any) (string, bool) {
+	projectID, ok := s.projectID(args)
+	if !ok {
+		return s.llmErrorText("ERR_DECISION_REQUEST_INVALID", "projectId obrigatorio", "", "", ""), true
+	}
+	providerID := strings.ToLower(strings.TrimSpace(stringArg(args, "providerId", "")))
+	profileID := s.profileIDForProvider(args, providerID)
+	body := map[string]any{"providerId": providerID, "profileId": profileID, "apiKey": stringArg(args, "apiKey", "")}
+	var response any
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/decisions/login"
+	if err := s.doJSON(ctx, http.MethodPost, path, body, &response, true); err != nil {
+		return s.llmErrorFromError(err, providerID, projectID, profileID), true
+	}
+	return marshalText(response), false
+}
+
+func (s *Server) decisionStatus(ctx context.Context, args map[string]any) (string, bool) {
+	projectID, ok := s.projectID(args)
+	if !ok {
+		return s.llmErrorText("ERR_DECISION_REQUEST_INVALID", "projectId obrigatorio", "", "", ""), true
+	}
+	providerID := strings.ToLower(strings.TrimSpace(stringArg(args, "providerId", "")))
+	profileID := s.profileIDForProvider(args, providerID)
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/decisions/status?providerId=" + url.QueryEscape(providerID) + "&profileId=" + url.QueryEscape(profileID)
+	var response any
+	if err := s.doJSON(ctx, http.MethodGet, path, nil, &response, true); err != nil {
+		return s.llmErrorFromError(err, providerID, projectID, profileID), true
+	}
+	return marshalText(response), false
+}
+
+func (s *Server) decisionEvaluate(ctx context.Context, args map[string]any) (string, bool) {
+	projectID, ok := s.projectID(args)
+	if !ok {
+		return s.llmErrorText("ERR_DECISION_REQUEST_INVALID", "projectId obrigatorio", "", "", ""), true
+	}
+	providerID := strings.ToLower(strings.TrimSpace(stringArg(args, "providerId", "")))
+	profileID := s.profileIDForProvider(args, providerID)
+	body := map[string]any{
+		"providerId": providerID,
+		"profileId":  profileID,
+		"model":      stringArg(args, "model", ""),
+		"state":      args["state"],
+		"questions":  args["questions"],
+	}
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/decisions/evaluate"
+	var response any
+	if err := s.doJSON(ctx, http.MethodPost, path, body, &response, true); err != nil {
+		return s.llmErrorFromError(err, providerID, projectID, profileID), true
+	}
+	return marshalText(response), false
+}
+
 func (s *Server) openaiLoginStart(ctx context.Context, args map[string]any) (string, bool) {
 	response, err := s.openaiLoginStartValue(ctx, args)
 	if err != nil {
@@ -254,7 +329,7 @@ func (s *Server) llmLoginStart(ctx context.Context, args map[string]any) (string
 	profileID := s.profileIDForProvider(args, providerID)
 	mode := stringArg(args, "mode", "")
 	if mode == "" {
-		if providerID == "lmstudio" {
+		if providerID == "lmstudio" || providerID == "anthropic" || providerID == "openrouter" {
 			mode = "api_key"
 		} else {
 			mode = "device_code"
@@ -669,6 +744,9 @@ func (s *Server) modelForProvider(args map[string]any, providerID string) string
 	if providerID == "lmstudio" {
 		return "local-model"
 	}
+	if providerID == "anthropic" || providerID == "openrouter" {
+		return ""
+	}
 	return "gpt-5.6-sol"
 }
 
@@ -969,9 +1047,52 @@ func toolDefinitions() []map[string]any {
 			}, []string{"projectId"}),
 		},
 		{
+			"name":        "decision_providers",
+			"title":       "Decision Providers",
+			"description": "Lista providers de decisao tipada. Estes providers nao geram texto nem aparecem no catalogo de chat LLM.",
+			"inputSchema": objectSchema(map[string]any{
+				"projectId": map[string]any{"type": "string"},
+				"profileId": map[string]any{"type": "string", "default": "default"},
+			}, []string{"projectId"}),
+		},
+		{
+			"name":        "decision_login",
+			"title":       "Decision Provider Login",
+			"description": "Valida e salva criptografada uma API key para TypeSafe Jev ou OpenRouter Jev.",
+			"inputSchema": objectSchema(map[string]any{
+				"providerId": map[string]any{"type": "string", "enum": []string{"typesafe-jev", "openrouter-jev"}},
+				"projectId":  map[string]any{"type": "string"},
+				"profileId":  map[string]any{"type": "string", "default": "default"},
+				"apiKey":     map[string]any{"type": "string", "format": "password"},
+			}, []string{"providerId", "projectId", "apiKey"}),
+		},
+		{
+			"name":        "decision_status",
+			"title":       "Decision Provider Status",
+			"description": "Consulta o estado da credencial de um provider de decisao.",
+			"inputSchema": objectSchema(map[string]any{
+				"providerId": map[string]any{"type": "string", "enum": []string{"typesafe-jev", "openrouter-jev"}},
+				"projectId":  map[string]any{"type": "string"},
+				"profileId":  map[string]any{"type": "string", "default": "default"},
+			}, []string{"providerId", "projectId"}),
+		},
+		{
+			"name":        "decision_evaluate",
+			"title":       "Decision Evaluate",
+			"description": "Executa perguntas tipadas em state e retorna answers/probabilidades do modelo de decisao.",
+			"inputSchema": objectSchema(map[string]any{
+				"providerId": map[string]any{"type": "string", "enum": []string{"typesafe-jev", "openrouter-jev"}},
+				"projectId":  map[string]any{"type": "string"},
+				"profileId":  map[string]any{"type": "string", "default": "default"},
+				"model":      map[string]any{"type": "string", "description": "Default: jev-latest ou ~typesafe/jev-latest conforme o provider."},
+				"state":      map[string]any{"description": "Estado compartilhado pelas perguntas; texto, objeto ou array."},
+				"questions":  map[string]any{"type": "object", "description": "Mapa de id para perguntas tipadas noul, choice ou score.", "additionalProperties": true},
+			}, []string{"providerId", "projectId", "state", "questions"}),
+		},
+		{
 			"name":        "llm_login_start",
 			"title":       "Start LLM Login",
-			"description": "Inicia login OAuth ou device-code para um provider/projeto/perfil.",
+			"description": "Inicia login OAuth, device-code ou cadastro de API key para um provider/projeto/perfil.",
 			"inputSchema": objectSchema(map[string]any{
 				"providerId": map[string]any{"type": "string", "default": "openai"},
 				"projectId":  map[string]any{"type": "string"},
