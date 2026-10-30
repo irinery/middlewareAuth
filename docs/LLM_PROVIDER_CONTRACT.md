@@ -233,7 +233,7 @@ Claude API e OpenRouter seguem o mesmo formato:
 
 O `workspaceId` Claude e opcional para chaves vinculadas a um workspace e obrigatorio para chaves de multiplos workspaces. As chaves sao verificadas por `GET /v1/models?limit=1` na Anthropic e `GET /api/v1/key` no OpenRouter antes da persistencia criptografada. `models` fica vazio no catalogo desses dois providers: o consumidor informa o ID do modelo disponivel para sua conta. No OpenRouter o formato usual e `autor/modelo`.
 
-O `providerId: "anthropic"` representa a API do Claude com chave da Console. A assinatura Claude Free/Pro/Max nao e um modo de login deste middleware: a [documentacao da Anthropic](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) nao permite a aplicativos de terceiros armazenar tokens da assinatura nem intermediar requests com eles. O usuario pode autenticar a assinatura diretamente no binario oficial Claude Code.
+Regra de autenticacao: somente `openai` oferece login por assinatura (`oauth` ou `device_code`). `anthropic` (Claude) e `openrouter` oferecem apenas `api_key`; requests de login desses providers com outro `mode` recebem `ERR_LLM_REQUEST_INVALID`. O `providerId: "anthropic"` usa chave da Claude Console. Credenciais de assinatura Claude nao entram no middleware, conforme a [documentacao da Anthropic](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
 
 Resposta pendente:
 

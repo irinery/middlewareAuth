@@ -32,7 +32,11 @@ func main() {
 	store := auth.NewFileStore(*cfg)
 	refresher := auth.NewRefresher(*cfg, store, httpClient)
 	codexTransport := codex.NewTransport(cfg.Codex, httpClient)
-	handler := httpapi.NewHandler(*cfg, store, refresher, codexTransport, httpClient)
+	handler, err := httpapi.NewHandler(*cfg, store, refresher, codexTransport, httpClient)
+	if err != nil {
+		logger.Error(ctx, "falha ao carregar token interno", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 	server := config.NewHTTPServer(cfg.HTTP, handler)
 
 	go func() {

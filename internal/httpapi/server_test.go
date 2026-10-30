@@ -43,7 +43,11 @@ func testHandler(t *testing.T) *Handler {
 		t.Fatal(err)
 	}
 	store := auth.NewFileStore(*cfg)
-	return NewHandler(*cfg, store, fakeRefresher{}, fakeCodex{}, http.DefaultClient)
+	handler, err := NewHandler(*cfg, store, fakeRefresher{}, fakeCodex{}, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
 }
 
 func TestLoginReturnsAuthURLWithoutSecrets(t *testing.T) {

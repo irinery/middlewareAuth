@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Client struct {
 	baseURL         string
+	tokenMu         sync.RWMutex
 	middlewareToken string
 	httpClient      *http.Client
 	timeout         time.Duration
@@ -97,7 +99,10 @@ func (c *Client) doJSON(ctx context.Context, method string, path string, body an
 			cancel()
 			return &ClientError{Code: "ERR_CLIENT_HTTP_FAILED", Message: err.Error()}
 		}
-		req.Header.Set("Authorization", "Bearer "+c.middlewareToken)
+		c.tokenMu.RLock()
+		token := c.middlewareToken
+		c.tokenMu.RUnlock()
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
 		resp, err := c.httpClient.Do(req)

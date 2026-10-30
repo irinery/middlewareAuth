@@ -86,3 +86,19 @@ func TestClaudeSubscriptionTokenIsNotStoredAsAPIKey(t *testing.T) {
 		t.Fatal("token de assinatura aceito")
 	}
 }
+
+func TestCloudProvidersAcceptOnlyAPIKeyMode(t *testing.T) {
+	h := testHandler(t)
+	for _, providerID := range []string{providerAnthropic, providerOpenRouter} {
+		for _, mode := range []string{"oauth", "device_code"} {
+			body, _ := json.Marshal(map[string]string{"providerId": providerID, "mode": mode})
+			req := httptest.NewRequest(http.MethodPost, "/v1/projects/acme/llm/login", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+handlerTestToken)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "ERR_LLM_REQUEST_INVALID") {
+				t.Fatalf("%s/%s: status=%d body=%s", providerID, mode, rec.Code, rec.Body.String())
+			}
+		}
+	}
+}
