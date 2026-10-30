@@ -18,6 +18,7 @@ Implementado:
 - identity JWT e refresh com lock por perfil;
 - transporte Codex HTTP/SSE com headers protegidos e retry;
 - API HTTP interna;
+- rotacao autenticada do token interno, persistida entre reinicios;
 - adapters Claude API e OpenRouter por API key no contrato LLM generico;
 - adapters de decisao TypeSafe Jev e OpenRouter Jev em contrato separado do catalogo de chat;
 - SDK Go em `pkg/client`;
@@ -92,6 +93,7 @@ GET  http://localhost:18787/v1/projects/{projectId}/decisions/providers?profileI
 POST http://localhost:18787/v1/projects/{projectId}/decisions/login
 GET  http://localhost:18787/v1/projects/{projectId}/decisions/status?providerId={providerId}&profileId={profileId}
 POST http://localhost:18787/v1/projects/{projectId}/decisions/evaluate
+POST http://localhost:18787/v1/auth/client-token/rotate
 ```
 
 O contrato generico e seus payloads estao em [docs/LLM_PROVIDER_CONTRACT.md](./docs/LLM_PROVIDER_CONTRACT.md). Rotas especificas continuam disponiveis para compatibilidade:
@@ -113,6 +115,10 @@ Nos endpoints protegidos:
 ```http
 Authorization: Bearer <MIDDLEWARE_CLIENT_TOKEN>
 ```
+
+A rotacao do token global exige o valor atual e invalida o anterior
+imediatamente. Contrato e exemplo em
+[docs/CLIENT_TOKEN_ROTATION.md](./docs/CLIENT_TOKEN_ROTATION.md).
 
 Exemplo local pelo contrato canonico:
 
@@ -196,7 +202,7 @@ O provider `lmstudio` usa API key local salva criptografada pelo middleware e fa
 
 Claude API e OpenRouter usam o mesmo endpoint `llm/login` com `mode: "api_key"` e `authFields.apiKey`. Para Claude, `authFields.workspaceId` e opcional quando a chave precisa selecionar um workspace. O middleware valida a chave no provider antes de salva-la criptografada, e usa `providerId: "anthropic"` ou `"openrouter"` em `llm/responses`. O `model` e livre; use o ID da API Anthropic ou o slug `autor/modelo` do OpenRouter. Exemplos estao no contrato canonico.
 
-Credenciais de assinatura Claude Free/Pro/Max nao entram neste middleware. A Anthropic permite login da assinatura no Claude Code oficial, mas nao permite que aplicativos de terceiros armazenem os tokens ou encaminhem requisicoes com essas credenciais. Para usar a assinatura, execute o Claude Code oficial e autentique-se nele diretamente. Consulte a [politica de credenciais da Anthropic](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
+Neste projeto, somente o provider `openai` usa credenciais de assinatura, pelo fluxo OAuth/device code ja existente. `anthropic` (Claude) e `openrouter` aceitam exclusivamente chave de API. Tokens de assinatura Claude nao sao coletados nem usados pelo middleware, conforme a [politica de credenciais da Anthropic](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
 
 O catalogo `llm_providers` descobre os modelos OpenAI liberados para o perfil autenticado, incluindo esforcos e tiers como `Fast`. Para selecionar, use `llm_responses` com `providerId`, `model`, `reasoningEffort`/`reasoning` e `serviceTier`; o wrapper aceita valores livres e `extra` para seletores futuros do backend.
 O endpoint upstream usa `OPENAI_CODEX_MODELS_PATH=/codex/models` e `OPENAI_CODEX_CLIENT_VERSION=0.145.0` por default; ambos podem ser ajustados sem depender de uma instalacao local do Codex.

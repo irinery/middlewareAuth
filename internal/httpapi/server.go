@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -29,12 +28,13 @@ type CodexModelLister interface {
 }
 
 type Handler struct {
-	cfg       config.Config
-	store     auth.ProfileStore
-	refresher CredentialRefresher
-	codex     CodexSender
-	client    *http.Client
-	logger    *slog.Logger
+	cfg          config.Config
+	store        auth.ProfileStore
+	clientTokens *auth.ClientTokenStore
+	refresher    CredentialRefresher
+	codex        CodexSender
+	client       *http.Client
+	logger       *slog.Logger
 
 	sessionMu  sync.Mutex
 	sessions   map[string]*loginSession
@@ -70,20 +70,25 @@ type LoginSessionResponse struct {
 	Error           *security.AppError `json:"error,omitempty"`
 }
 
-func NewHandler(cfg config.Config, store auth.ProfileStore, refresher CredentialRefresher, codexSender CodexSender, client *http.Client) *Handler {
+func NewHandler(cfg config.Config, store auth.ProfileStore, refresher CredentialRefresher, codexSender CodexSender, client *http.Client) (*Handler, error) {
+	clientTokens, err := auth.NewClientTokenStore(cfg.StateDir, cfg.Security.MiddlewareToken)
+	if err != nil {
+		return nil, err
+	}
 	if client == nil {
 		client = config.NewHTTPClient(cfg.Codex)
 	}
 	return &Handler{
-		cfg:        cfg,
-		store:      store,
-		refresher:  refresher,
-		codex:      codexSender,
-		client:     client,
-		logger:     slog.Default(),
-		sessions:   make(map[string]*loginSession),
-		stateIndex: make(map[string]string),
-	}
+		cfg:          cfg,
+		store:        store,
+		clientTokens: clientTokens,
+		refresher:    refresher,
+		codex:        codexSender,
+		client:       client,
+		logger:       slog.Default(),
+		sessions:     make(map[string]*loginSession),
+		stateIndex:   make(map[string]string),
+	}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +110,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/v1/auth/openai/callback" {
 		h.handleCallback(w, r)
+		return
+	}
+	if r.URL.Path == "/v1/auth/client-token/rotate" && r.Method == http.MethodPost {
+		h.handleClientTokenRotate(w, r)
 		return
 	}
 	parts := splitPath(r.URL.Path)
@@ -201,11 +210,7 @@ func (h *Handler) handleProjectRoute(w http.ResponseWriter, r *http.Request, pro
 }
 
 func (h *Handler) authorized(r *http.Request) bool {
-	expected := h.cfg.Security.MiddlewareToken
-	if expected == "" {
-		return false
-	}
-	if tokensEqual(r.Header.Get("X-Middleware-Token"), expected) {
+	if h.clientTokens.Valid(r.Header.Get("X-Middleware-Token")) {
 		return true
 	}
 	authz := r.Header.Get("Authorization")
@@ -213,14 +218,26 @@ func (h *Handler) authorized(r *http.Request) bool {
 	if !strings.HasPrefix(authz, bearer) {
 		return false
 	}
-	return tokensEqual(strings.TrimSpace(strings.TrimPrefix(authz, bearer)), expected)
+	return h.clientTokens.Valid(strings.TrimSpace(strings.TrimPrefix(authz, bearer)))
 }
 
-func tokensEqual(got, expected string) bool {
-	if len(got) != len(expected) {
-		return false
+func (h *Handler) handleClientTokenRotate(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("X-Middleware-Token")
+	if !h.clientTokens.Valid(token) {
+		const bearer = "Bearer "
+		authz := r.Header.Get("Authorization")
+		if strings.HasPrefix(authz, bearer) {
+			token = strings.TrimSpace(strings.TrimPrefix(authz, bearer))
+		}
 	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+	next, err := h.clientTokens.Rotate(token)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		ClientToken string `json:"clientToken"`
+	}{ClientToken: next})
 }
 
 func (h *Handler) addSession(session loginSession) error {

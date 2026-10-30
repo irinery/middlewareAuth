@@ -151,6 +151,9 @@ func (cfg *Config) validate(ctx context.Context) error {
 	if len(cfg.Security.MiddlewareToken) < 32 {
 		return security.NewError("ERR_CLIENT_TOKEN_REQUIRED", "MIDDLEWARE_CLIENT_TOKEN precisa ter 32+ caracteres", http.StatusBadRequest)
 	}
+	if len(cfg.Security.MiddlewareToken) > 2048 {
+		return security.NewError("ERR_CLIENT_TOKEN_REQUIRED", "MIDDLEWARE_CLIENT_TOKEN excede 2048 caracteres", http.StatusBadRequest)
+	}
 	if !cfg.Security.RedactLogs {
 		return security.NewError("ERR_LOG_REDACTION_REQUIRED", "MIDDLEWARE_REDACT_LOGS nao pode ser desabilitado", http.StatusBadRequest)
 	}
