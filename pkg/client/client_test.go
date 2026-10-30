@@ -175,3 +175,35 @@ func TestClientDoesNotFollowRedirectsWithMiddlewareToken(t *testing.T) {
 		t.Fatal("client seguiu redirect com bearer interno")
 	}
 }
+
+func TestRotateClientTokenUpdatesFollowingRequests(t *testing.T) {
+	const nextToken = "new-client-test-token-with-32-characters"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/client-token/rotate":
+			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer "+clientTestToken {
+				t.Errorf("rotation request: method=%s auth=%q", r.Method, r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{"clientToken":"` + nextToken + `"}`))
+		case "/v1/projects/acme/auth/openai/refresh":
+			if r.Header.Get("Authorization") != "Bearer "+nextToken {
+				t.Errorf("following request auth=%q", r.Header.Get("Authorization"))
+			}
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected path=%s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	c, err := NewClient(ClientOptions{BaseURL: server.URL, MiddlewareToken: clientTestToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Auth.RotateClientToken(context.Background())
+	if err != nil || got != nextToken {
+		t.Fatalf("RotateClientToken()=%q, %v", got, err)
+	}
+	if err := c.Auth.Refresh(context.Background(), RefreshRequest{ProjectID: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+}

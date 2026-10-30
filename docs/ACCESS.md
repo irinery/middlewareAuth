@@ -23,6 +23,10 @@ Para expor fora do localhost, configure `HTTP_BIND_ADDR` e `MIDDLEWARE_ALLOW_NON
 
 `MIDDLEWARE_SECRET_KEY` e `MIDDLEWARE_CLIENT_TOKEN` precisam ter pelo menos 32 caracteres. O callback OAuth usa obrigatoriamente a mesma `HTTP_PORT`: existe somente um listener HTTP. A redacao de logs e obrigatoria; `MIDDLEWARE_REDACT_LOGS=false` impede o boot.
 
+Para trocar o token de acesso de todos os clientes sem reiniciar o servico,
+use [a operacao de rotacao](./CLIENT_TOKEN_ROTATION.md). Depois da primeira
+troca, o hash persistido no state dir prevalece sobre o token inicial do ambiente.
+
 Subir o servico:
 
 ```sh
