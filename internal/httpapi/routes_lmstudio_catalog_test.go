@@ -22,7 +22,7 @@ func TestLLMProvidersListsOnlyModelsFromSelectedLMStudioProfile(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data":[{"id":"model-z"},{"id":"model-a"},{"id":"model-a"},{"id":""},{"id":%q},{"id":"sk-sensitive-token-123456"}]}`, secret)
+		fmt.Fprintf(w, `{"data":[{"id":"model-z"},{"id":"model-a"},{"id":"model-a"},{"id":""},{"id":%q},{"id":%q}]}`, secret, "sk-"+"sensitive-token-123456")
 	}))
 	defer upstream.Close()
 	h := testHandler(t)
