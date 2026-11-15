@@ -23,6 +23,8 @@ Para expor fora do localhost, configure `HTTP_BIND_ADDR` e `MIDDLEWARE_ALLOW_NON
 
 `MIDDLEWARE_SECRET_KEY` e `MIDDLEWARE_CLIENT_TOKEN` precisam ter pelo menos 32 caracteres. O callback OAuth usa obrigatoriamente a mesma `HTTP_PORT`: existe somente um listener HTTP. A redacao de logs e obrigatoria; `MIDDLEWARE_REDACT_LOGS=false` impede o boot.
 
+Um processo supervisor local pode abrir o socket antes de iniciar o middleware e passá-lo como descritor herdado em `MIDDLEWARE_INHERITED_LISTENER_FD`. O descritor deve ser pelo menos 3 e apontar para um listener TCP loopback que corresponda a `HTTP_BIND_ADDR` e `HTTP_PORT`. Um descritor inválido impede a inicialização; sem essa variável o middleware abre seu próprio listener normalmente. Essa opção também permite testes entre processos sem reservar e soltar uma porta entre a escolha e o bind.
+
 Para trocar o token de acesso de todos os clientes sem reiniciar o servico,
 use [a operacao de rotacao](./CLIENT_TOKEN_ROTATION.md). Depois da primeira
 troca, o hash persistido no state dir prevalece sobre o token inicial do ambiente.
