@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/irinery/middlewareAuth/internal/codex"
 	"github.com/irinery/middlewareAuth/internal/llmcontract"
@@ -125,6 +126,9 @@ func (t *Transport) ListModels(ctx context.Context, baseURL string, apiKey strin
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, mapHTTPStatus(resp.StatusCode)
 	}
+	if !utf8.Valid(raw) || !validJSONUnicodeEscapes(raw) {
+		return nil, security.NewError("ERR_LMSTUDIO_RESPONSE_INVALID", "resposta de modelos LM Studio invalida", http.StatusBadGateway)
+	}
 	var parsed struct {
 		Data []Model `json:"data"`
 	}
@@ -132,6 +136,74 @@ func (t *Transport) ListModels(ctx context.Context, baseURL string, apiKey strin
 		return nil, security.Wrap("ERR_LMSTUDIO_RESPONSE_INVALID", "resposta de modelos LM Studio invalida", http.StatusBadGateway, err)
 	}
 	return parsed.Data, nil
+}
+
+// encoding/json replaces invalid surrogate escapes with U+FFFD. Model IDs must
+// be the exact upstream IDs, so reject such responses instead of repairing them.
+func validJSONUnicodeEscapes(raw []byte) bool {
+	inString := false
+	for i := 0; i < len(raw); i++ {
+		if !inString {
+			if raw[i] == '"' {
+				inString = true
+			}
+			continue
+		}
+		if raw[i] == '"' {
+			inString = false
+			continue
+		}
+		if raw[i] != '\\' {
+			continue
+		}
+		i++
+		if i >= len(raw) {
+			return false
+		}
+		if raw[i] != 'u' {
+			continue
+		}
+		if i+4 >= len(raw) {
+			return false
+		}
+		value, ok := unicodeHex(raw[i+1 : i+5])
+		if !ok {
+			return false
+		}
+		i += 4
+		if value >= 0xdc00 && value <= 0xdfff {
+			return false
+		}
+		if value >= 0xd800 && value <= 0xdbff {
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return false
+			}
+			low, ok := unicodeHex(raw[i+3 : i+7])
+			if !ok || low < 0xdc00 || low > 0xdfff {
+				return false
+			}
+			i += 6
+		}
+	}
+	return true
+}
+
+func unicodeHex(value []byte) (uint16, bool) {
+	var out uint16
+	for _, c := range value {
+		out <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			out |= uint16(c - '0')
+		case c >= 'a' && c <= 'f':
+			out |= uint16(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			out |= uint16(c-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return out, true
 }
 
 func (t *Transport) SendResponse(ctx context.Context, baseURL string, apiKey string, request codex.CodexResponseRequest) (*codex.CodexResponseStream, error) {
