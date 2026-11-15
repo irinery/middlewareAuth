@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,10 +39,24 @@ func main() {
 		os.Exit(1)
 	}
 	server := config.NewHTTPServer(cfg.HTTP, handler)
+	var listener net.Listener
+	if inheritedFD, present := os.LookupEnv("MIDDLEWARE_INHERITED_LISTENER_FD"); present {
+		listener, err = inheritedListener(inheritedFD, cfg.HTTP)
+		if err != nil {
+			logger.Error(ctx, "listener herdado invalido", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}
 
 	go func() {
 		logger.Info(ctx, "middleware iniciado", slog.String("addr", server.Addr))
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if listener == nil {
+			err = server.ListenAndServe()
+		} else {
+			err = server.Serve(listener)
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error(ctx, "servidor HTTP falhou", slog.String("error", err.Error()))
 			stop()
 		}

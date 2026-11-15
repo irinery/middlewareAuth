@@ -6,9 +6,13 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/irinery/middlewareAuth/internal/codex"
 	"github.com/irinery/middlewareAuth/internal/llmcontract"
+	"github.com/irinery/middlewareAuth/internal/lmstudio"
 	"github.com/irinery/middlewareAuth/internal/security"
 )
 
@@ -135,6 +139,7 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, pro
 		return
 	}
 	openAIModels := h.openAIModels(r.Context(), projectID, profileID)
+	lmStudioModels := h.lmStudioModels(r.Context(), projectID, profileID)
 	defaultOpenAIModel := "gpt-5.6-sol"
 	if len(openAIModels) > 0 {
 		defaultOpenAIModel = openAIModels[0].ID
@@ -163,7 +168,7 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, pro
 					},
 				},
 				Defaults:     LLMProviderDefaults{ProfileID: "default", Model: "local-model"},
-				Models:       []LLMProviderModel{},
+				Models:       lmStudioModels,
 				Capabilities: llmProviderCapabilities(providerLMStudio),
 			},
 			{
@@ -185,6 +190,42 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request, pro
 			},
 		},
 	})
+}
+
+// lmStudioModels queries only the credential selected by the authenticated
+// project/profile. Failure never fabricates a model or exposes upstream data.
+func (h *Handler) lmStudioModels(ctx context.Context, projectID, profileID string) []LLMProviderModel {
+	result := make([]LLMProviderModel, 0)
+	credential, err := h.store.LoadProviderCredential(ctx, providerLMStudio, projectID, profileID)
+	if err != nil {
+		return result
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	models, err := lmstudio.NewTransport(nil).ListModels(ctx, credential.BaseURL, credential.Access)
+	if err != nil {
+		return result
+	}
+	// Do not publish a catalog obtained for a profile that changed while the
+	// upstream request was in flight. Credential values stay inside this process.
+	current, err := h.store.LoadProviderCredential(ctx, providerLMStudio, projectID, profileID)
+	if err != nil || *current != *credential {
+		return result
+	}
+	seen := make(map[string]struct{})
+	for _, model := range models {
+		id := model.ID
+		if id == "" || len(id) > 120 || !utf8.ValidString(id) || strings.TrimSpace(id) != id || strings.IndexFunc(id, unicode.IsControl) >= 0 || security.Redact(id) != id || strings.Contains(id, strings.TrimSpace(credential.Access)) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, LLMProviderModel{ID: id, Title: id})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 
 func (h *Handler) openAIModels(ctx context.Context, projectID, profileID string) []LLMProviderModel {
